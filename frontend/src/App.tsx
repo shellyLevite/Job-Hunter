@@ -3,8 +3,9 @@ import { useAuth } from './AuthContext'
 import LoginPage from './pages/LoginPage'
 import KanbanBoard from './pages/KanbanBoard'
 import JobsPage from './pages/JobsPage'
+import CVPage from './pages/CVPage'
 
-type Tab = 'board' | 'jobs'
+type Tab = 'board' | 'jobs' | 'cv'
 
 export default function App() {
   const { userEmail, isLoading, logout } = useAuth()
@@ -42,6 +43,14 @@ export default function App() {
             >
               Browse Jobs
             </button>
+            <button
+              onClick={() => setTab('cv')}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                tab === 'cv' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              My CV
+            </button>
           </nav>
         </div>
         <div className="flex items-center gap-3">
@@ -63,11 +72,18 @@ export default function App() {
               <KanbanBoard />
             </div>
           </>
-        ) : (
+        ) : tab === 'jobs' ? (
           <>
             <h2 className="flex-shrink-0 text-xl font-bold mb-4">Job Listings</h2>
             <div className="flex-1 min-h-0 overflow-y-auto">
               <JobsPage />
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="flex-shrink-0 text-xl font-bold mb-4">My CV</h2>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <CVPage />
             </div>
           </>
         )}

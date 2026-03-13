@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
+    STORAGE_BUCKET: str = "CVS"
 
     # Scraper config
     SCRAPE_QUERY: str = "software engineer"

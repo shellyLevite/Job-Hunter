@@ -128,3 +128,26 @@ export const updateApplication = async (
 export const deleteApplication = async (id: string) => {
   await api.delete(`/applications/${id}`)
 }
+
+// ── CV ─────────────────────────────────────────────────────────────────────
+
+export interface CvRecord {
+  storage_path: string
+  filename: string
+  signed_url: string
+  created_at: string
+}
+
+export const uploadCv = async (file: File): Promise<{ storage_path: string; signed_url: string }> => {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post('/cv/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data
+}
+
+export const fetchLatestCv = async (): Promise<CvRecord> => {
+  const { data } = await api.get('/cv/latest')
+  return data
+}
