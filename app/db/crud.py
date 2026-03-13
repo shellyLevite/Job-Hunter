@@ -34,14 +34,7 @@ def create_user(client: Client, email: str, hashed_password: str) -> Dict[str, A
 
 def create_google_user(client: Client, email: str) -> Dict[str, Any]:
     """Insert a new user row for a Google-authenticated user (no password)."""
-    payload = {
-        "id": str(uuid.uuid4()),
-        "email": email,
-        "hashed_password": "",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    response = client.table("users").insert(payload).execute()
-    return response.data[0]
+    return create_user(client, email=email, hashed_password="")
 
 
 def create_cv_record(
@@ -67,7 +60,12 @@ def create_cv_record(
 # ---------------------------------------------------------------------------
 
 def upsert_job(client: Client, job: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the existing job row for this URL, or insert and return a new one."""
+    """Return the existing job row for this URL, inserting a new one if needed.
+
+    A try/except wraps the INSERT to handle the race condition where two
+    concurrent requests both pass the existence check; only one INSERT wins
+    the unique URL constraint — the loser fetches and returns the winner's row.
+    """
     existing = (
         client.table("jobs").select("*").eq("url", job["url"]).limit(1).execute().data
     )
@@ -83,7 +81,14 @@ def upsert_job(client: Client, job: Dict[str, Any]) -> Dict[str, Any]:
         "url": job["url"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    return client.table("jobs").insert(payload).execute().data[0]
+    try:
+        return client.table("jobs").insert(payload).execute().data[0]
+    except Exception:
+        # Race condition: a concurrent request inserted the same URL first.
+        rows = client.table("jobs").select("*").eq("url", job["url"]).limit(1).execute().data
+        if rows:
+            return rows[0]
+        raise
 
 
 def get_jobs(
@@ -199,7 +204,7 @@ def update_application(
 ) -> Optional[Dict[str, Any]]:
     """Patch allowed fields on an application; returns updated row or None."""
     allowed = {"status", "notes", "applied_at"}
-    patch = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    patch = {k: v for k, v in fields.items() if k in allowed}
     if not patch:
         return get_application_by_id(client, application_id, user_id)
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()

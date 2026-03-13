@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
 
+import secrets
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -110,37 +112,23 @@ def get_current_user_optional(
     client: Client = Depends(get_supabase),
 ) -> Optional[UserRead]:
     """Like get_current_user but returns None instead of raising 401.
-    Falls back to the refresh token when the access token is expired,
-    so ranking still works after the 30-min access-token window.
+
+    Note: does NOT fall back to the refresh token.  The refresh cookie is
+    path-restricted to /auth/refresh by the browser, so using it here would
+    be dead code and would violate the principle of least privilege.
     """
     token = request.cookies.get(_COOKIE_ACCESS)
-    email: Optional[str] = None
-
-    if token:
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-            email = payload.get("sub")
-        except JWTError:
-            pass  # try refresh token below
-
-    # Access token missing or expired — try the refresh token as a fallback
-    if email is None:
-        refresh = request.cookies.get(_COOKIE_REFRESH)
-        if refresh:
-            try:
-                payload = jwt.decode(refresh, settings.REFRESH_SECRET_KEY, algorithms=[settings.ALGORITHM])
-                email = payload.get("sub")
-            except JWTError:
-                return None
-        else:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        email: Optional[str] = payload.get("sub")
+        if email is None:
             return None
-
-    if email is None:
+    except JWTError:
         return None
     user = crud.get_user_by_email(client, email)
-    if user is None:
-        return None
-    return UserRead(email=user["email"])
+    return UserRead(email=user["email"]) if user else None
 
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
@@ -148,6 +136,7 @@ def get_current_user_optional(
 @router.get("/google/login")
 def google_login():
     """Redirect the browser to Google's OAuth consent screen."""
+    state = secrets.token_urlsafe(32)
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
@@ -155,16 +144,32 @@ def google_login():
         "scope": "openid email profile",
         "access_type": "offline",
         "prompt": "select_account",
+        "state": state,
     }
-    return RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
+    redirect = RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
+    redirect.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        secure=settings.SECURE_COOKIES,
+        samesite="lax",
+        max_age=600,  # 10 minutes — enough to complete the OAuth dance
+    )
+    return redirect
 
 
 @router.get("/google/callback")
 async def google_callback(
     code: str,
+    state: str,
+    request: Request,
     client: Client = Depends(get_supabase),
 ):
     """Exchange the authorization code, find/create the user, set cookies, redirect to frontend."""
+    stored_state = request.cookies.get("oauth_state")
+    if not stored_state or not secrets.compare_digest(stored_state, state):
+        raise HTTPException(status_code=400, detail="Invalid OAuth state — possible CSRF attack")
+
     async with httpx.AsyncClient() as http:
         token_res = await http.post(
             _GOOGLE_TOKEN_URL,
@@ -197,6 +202,7 @@ async def google_callback(
 
     redirect = RedirectResponse(url=settings.FRONTEND_URL, status_code=302)
     _set_auth_cookies(redirect, email)
+    redirect.delete_cookie("oauth_state")
     return redirect
 
 

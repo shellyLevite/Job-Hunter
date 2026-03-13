@@ -95,16 +95,23 @@ function EditModal({ app, onClose, onSave }: { app: Application; onClose: () => 
   const [notes, setNotes] = useState(app.notes ?? '')
   const [appliedAt, setAppliedAt] = useState(app.applied_at ? app.applied_at.slice(0, 10) : '')
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const save = async () => {
     setSaving(true)
-    const updated = await updateApplication(app.id, {
-      notes: notes || undefined,
-      applied_at: appliedAt ? new Date(appliedAt).toISOString() : undefined,
-    })
-    onSave(updated)
-    setSaving(false)
-    onClose()
+    setSaveError(null)
+    try {
+      const updated = await updateApplication(app.id, {
+        notes: notes || undefined,
+        applied_at: appliedAt ? new Date(appliedAt).toISOString() : undefined,
+      })
+      onSave(updated)
+      onClose()
+    } catch {
+      setSaveError('Failed to save changes. Please try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -131,6 +138,9 @@ function EditModal({ app, onClose, onSave }: { app: Application; onClose: () => 
           className="w-full bg-gray-800 text-white rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 mb-6"
         />
 
+        {saveError && (
+          <p className="text-red-400 text-xs mb-3">{saveError}</p>
+        )}
         <div className="flex justify-end gap-3">
           <button onClick={onClose} className="text-gray-400 hover:text-white text-sm px-4 py-2">Cancel</button>
           <button
@@ -232,15 +242,24 @@ export default function KanbanBoard() {
     const app = apps.find((a) => a.id === draggedId)
     if (!app || app.status === newStatus) return
 
-    // Optimistic update
+    // Optimistic update — roll back on API failure so the board stays consistent
+    const snapshot = apps
     setApps((prev) => prev.map((a) => a.id === draggedId ? { ...a, status: newStatus } : a))
-    await updateApplication(draggedId, { status: newStatus })
+    try {
+      await updateApplication(draggedId, { status: newStatus })
+    } catch {
+      setApps(snapshot)
+    }
   }
 
   const handleDelete = async (id: string) => {
     if (!confirm('Remove this application?')) return
-    await deleteApplication(id)
-    setApps((prev) => prev.filter((a) => a.id !== id))
+    try {
+      await deleteApplication(id)
+      setApps((prev) => prev.filter((a) => a.id !== id))
+    } catch {
+      // Delete failed — UI state is unchanged
+    }
   }
 
   const handleSave = (updated: Application) => {

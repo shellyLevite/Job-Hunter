@@ -96,7 +96,7 @@ async def update_application(
         client,
         application_id=application_id,
         user_id=user_id,
-        **body.model_dump(exclude_none=True),
+        **body.model_dump(exclude_unset=True),
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Application not found")

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import time
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +23,7 @@ from app.core.config import settings
 from app.db import crud
 from app.db.session import get_supabase
 from app.schemas import UserRead
+from app.api.cv import _extract_text  # TODO: relocate to app.services once cv_parser is extracted
 from app.services.matcher import get_matching_engine
 from app.services.scraper.linkedin import LinkedInScraper
 
@@ -34,7 +36,8 @@ _SCRAPERS = {
 
 # -- In-memory search result cache --------------------------------------------
 _SEARCH_CACHE: dict[str, dict] = {}
-_SEARCH_TTL = 900  # 15 minutes
+_SEARCH_TTL = 900   # 15 minutes
+_CACHE_MAX = 256    # max entries; evict the soonest-to-expire entry on overflow
 
 
 # -- Request schemas ----------------------------------------------------------
@@ -77,6 +80,9 @@ def _get_cached(key: str) -> Optional[list]:
 
 
 def _set_cache(key: str, jobs: list) -> None:
+    if len(_SEARCH_CACHE) >= _CACHE_MAX:
+        oldest = min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k]["expires"])
+        del _SEARCH_CACHE[oldest]
     _SEARCH_CACHE[key] = {"jobs": jobs, "expires": time.monotonic() + _SEARCH_TTL}
 
 
@@ -157,9 +163,6 @@ async def search_jobs(
             # download from storage and parse now, then backfill the DB row.
             if not parsed and cv.get("file_path"):
                 try:
-                    import io
-                    from pathlib import Path
-                    from app.api.cv import _extract_text
                     file_bytes = client.storage.from_(settings.STORAGE_BUCKET).download(cv["file_path"])
                     suffix = Path(cv["file_path"]).suffix.lower()
                     parsed = _extract_text(file_bytes, suffix) or None
@@ -198,14 +201,17 @@ async def job_action(
 
     user_id = _get_user_id(client, user.email)
     job_row = crud.upsert_job(client, req.job.model_dump())
-    status = "saved" if req.action == "save" else "applied"
-    application = crud.create_application(
-        client,
-        user_id=user_id,
-        job_id=job_row["id"],
-        status=status,
-        notes=req.notes,
-    )
+    job_status = "saved" if req.action == "save" else "applied"
+    try:
+        application = crud.create_application(
+            client,
+            user_id=user_id,
+            job_id=job_row["id"],
+            status=job_status,
+            notes=req.notes,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail="This job is already tracked.") from exc
     return application
 
 

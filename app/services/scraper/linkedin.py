@@ -111,7 +111,7 @@ class LinkedInScraper(BaseJobScraper):
                         title        = title_el.get_text(strip=True)   if title_el   else ""
                         company      = company_el.get_text(strip=True)  if company_el else ""
                         location_txt = loc_el.get_text(strip=True)      if loc_el     else ""
-                        job_url      = link_el["href"].split("?")[0]    if link_el    else ""
+                        job_url      = link_el.get("href", "").split("?")[0] if link_el else ""
 
                         if not title or not job_url:
                             continue

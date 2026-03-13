@@ -7,7 +7,8 @@ const api = axios.create({
 
 // Intercept 401s: try silent token refresh once, then let the caller handle it
 let _refreshing = false
-let _refreshQueue: Array<() => void> = []
+type _QueueEntry = { resolve: () => void; reject: (e: unknown) => void }
+let _refreshQueue: _QueueEntry[] = []
 
 api.interceptors.response.use(
   (res) => res,
@@ -20,20 +21,24 @@ api.interceptors.response.use(
       !original.url?.includes('/auth/')
     ) {
       if (_refreshing) {
-        // Queue while a refresh is already in-flight
-        return new Promise((resolve) => {
-          _refreshQueue.push(() => resolve(api(original)))
+        // Queue while a refresh is already in-flight; each entry captures its
+        // own `original` so the retry re-executes the correct request.
+        return new Promise((resolve, reject) => {
+          _refreshQueue.push({ resolve: () => resolve(api(original)), reject })
         })
       }
       original._retry = true
       _refreshing = true
       try {
         await api.post('/auth/refresh')
-        _refreshQueue.forEach((cb) => cb())
+        const queue = _refreshQueue
         _refreshQueue = []
+        queue.forEach(({ resolve }) => resolve())
         return api(original)
-      } catch {
+      } catch (refreshErr) {
+        const queue = _refreshQueue
         _refreshQueue = []
+        queue.forEach(({ reject }) => reject(refreshErr))
         // Refresh failed — caller receives the original 401
       } finally {
         _refreshing = false
