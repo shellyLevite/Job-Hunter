@@ -1,12 +1,10 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { login as apiLogin, register as apiRegister, fetchMe, logoutApi } from './api'
+import { fetchMe, logoutApi } from './api'
 
 interface AuthCtx {
   userEmail: string | null
   isLoading: boolean
-  login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -24,23 +22,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false))
   }, [])
 
-  const login = async (email: string, password: string) => {
-    const { email: confirmedEmail } = await apiLogin(email, password)
-    setUserEmail(confirmedEmail)
-  }
-
-  const register = async (email: string, password: string) => {
-    const { email: confirmedEmail } = await apiRegister(email, password)
-    setUserEmail(confirmedEmail)
-  }
-
   const logout = async () => {
     await logoutApi()
     setUserEmail(null)
   }
 
   return (
-    <AuthContext.Provider value={{ userEmail, isLoading, login, register, logout }}>
+    <AuthContext.Provider value={{ userEmail, isLoading, logout }}>
       {children}
     </AuthContext.Provider>
   )

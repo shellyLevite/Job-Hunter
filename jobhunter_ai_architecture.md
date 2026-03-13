@@ -1,488 +1,237 @@
-# JobHunter AI -- System Architecture
+# Jobee — Next Steps & Roadmap
 
-## Overview
+## What's Already Built
 
-JobHunter AI is a platform designed to automate the job search process.\
-It continuously monitors job boards (including LinkedIn), filters
-opportunities according to user preferences, and automatically generates
-tailored resumes optimized for each job posting.
+- JWT authentication (register / login)
+- CV upload & parsing
+- LinkedIn & Indeed scrapers (basic)
+- Job matching engine (skill similarity score)
+- Application tracking (Kanban board)
+- Scheduler (periodic scraping)
+- React frontend (Jobs page, Kanban, Login)
 
-Core capabilities:
+---
 
--   Monitor new job postings in near real-time
--   Match jobs to user profiles
--   Generate tailored resumes using AI
--   Notify users immediately when relevant jobs appear
--   Track job applications and interview status
+## Next Steps
 
-------------------------------------------------------------------------
+---
 
-# High Level Architecture
+### 1. Google OAuth
 
-                    ┌──────────────────┐
-                    │   Frontend Web   │
-                    │   Next.js/React  │
-                    └────────┬─────────┘
-                             │
-                             │ REST API
-                             │
-                    ┌────────▼────────┐
-                    │   Backend API   │
-                    │  (FastAPI/Nest) │
-                    └────────┬────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-         ▼                   ▼                   ▼
-    User Service      Job Monitoring        AI Engine
-    Profiles & CV     Scrapers              Matching + Resume
+Replace (or supplement) the current email/password login with Google Sign-In.
 
-         │                   │                   │
-         ▼                   ▼                   ▼
-     PostgreSQL           Queue               LLM Provider
-     Redis Cache          Workers             Resume Generator
+**Why:** Reduces friction at signup, no password management, and opens the door to Gmail integration later.
 
-------------------------------------------------------------------------
+**How:**
+- Add `google-auth-oauthlib` to the backend
+- Create `/auth/google` and `/auth/google/callback` endpoints
+- Store `google_id` + `google_refresh_token` on the user row
+- Update the frontend login page to show a "Sign in with Google" button
+- Keep existing JWT flow — just issue a JWT after the Google callback
 
-# Technology Stack
+**DB change:**
+```
+users:
+  + google_id              string (nullable)
+  + google_refresh_token   text (nullable, encrypted)
+```
 
-## Backend
+---
 
--   FastAPI (Python) or NestJS (Node.js)
--   REST API
+### 2. Better LinkedIn Scraping
 
-## Frontend
+The current LinkedIn scraper is fragile and misses a lot of listings.
 
--   Next.js
--   TailwindCSS
+**Problems to fix:**
+- Selectors break on LinkedIn layout changes
+- No pagination — only first page of results
+- No retry/backoff on rate-limit responses
+- Duplicate jobs sneaking in across runs
 
-## Database
+**Improvements:**
+- Switch to a more resilient selector strategy (data attributes > CSS classes)
+- Add pagination loop with configurable max pages
+- Add exponential backoff + random delay between requests
+- Fingerprint jobs by `(title + company + location)` hash before inserting
+- Optionally integrate the LinkedIn unofficial API or a proxy service (e.g. Apify actor) as a fallback
 
--   PostgreSQL
+---
 
-## Cache / Queue
+### 3. Free CV Storage
 
--   Redis
--   BullMQ or Celery
+Currently CVs are saved to the local `uploads/` folder, which won't survive a server restart/redeploy.
 
-## Scraping
+**Options (all free tier):**
 
--   Playwright
+| Service           | Free tier | Notes                            |
+|-------------------|-----------|----------------------------------|
+| Cloudinary        | 25 GB     | Easy SDK, PDF support            |
+| Supabase Storage  | 1 GB      | Pairs well with Postgres         |
+| Backblaze B2      | 10 GB     | S3-compatible                    |
 
-## AI
+**Recommended:** Supabase Storage — free, S3-compatible, and consistent with a future Supabase DB migration.
 
--   OpenAI API or other LLM provider
--   Embeddings for similarity matching
+**Changes needed:**
+- Add `supabase-py` (or `boto3` for B2)
+- Replace local file save in `app/api/cv.py` with an upload call
+- Store the returned public URL in `cvs.file_path` instead of a local path
+- Add an env var `STORAGE_BUCKET` to `app/core/config.py`
 
-------------------------------------------------------------------------
+---
 
-# Core Services
+### 4. Scheduled Scraping — No Duplicates
 
-## 1. User Service
+The scheduler runs but duplicate jobs still appear in the DB.
 
-### Responsibilities
+**Plan:**
+- Add a `source_id` column to `jobs` — a hash of `(title + company + location + source)`
+- Use `INSERT ... ON CONFLICT (source_id) DO NOTHING` in the upsert
+- Log a count of new vs. skipped jobs per run
+- Store `last_scraped_at` per source so the scheduler can skip sources that ran recently
+- Add a dead-letter log for jobs that failed to parse (don't silently drop them)
 
--   User registration and authentication
--   Profile management
--   CV upload and parsing
--   Job search preferences
+**DB change:**
+```
+jobs:
+  + source_id   string UNIQUE   -- hash for deduplication
+  + scraped_at  timestamp
+```
 
-### Database Schema
+---
 
-### Users
-
-  Field           Type
-  --------------- -----------
-  id              uuid
-  email           string
-  password_hash   string
-  created_at      timestamp
-
-### Profiles
-
-  Field              Type
-  ------------------ ----------
-  user_id            uuid
-  name               string
-  location           string
-  years_experience   int
-  desired_roles      text\[\]
-  salary_range       int
-
-### CVs
-
-  Field            Type
-  ---------------- -----------
-  id               uuid
-  user_id          uuid
-  file_path        string
-  parsed_content   text
-  created_at       timestamp
-
-------------------------------------------------------------------------
-
-# 2. Job Monitoring Service
-
-This service continuously collects job postings from job boards.
-
-Supported sources:
-
--   LinkedIn
--   Indeed
--   Glassdoor (future)
-
-### Scheduler
-
-Runs every 10 minutes.
-
-### Workflow
-
-1.  Open job search page
-2.  Apply predefined filters
-3.  Extract job listings
-4.  Normalize data
-5.  Store jobs in database
-6.  Trigger matching process
-
-### Jobs Table
-
-  Field         Type
-  ------------- -----------
-  id            uuid
-  title         string
-  company       string
-  location      string
-  description   text
-  source        string
-  url           string
-  created_at    timestamp
-
-------------------------------------------------------------------------
-
-# 3. Job Matching Engine
-
-Purpose: determine how well a job fits a user's CV.
-
-### Pipeline
-
-1.  Extract required skills from job description
-2.  Extract skills from CV
-3.  Compute similarity score
-4.  Identify missing skills
-
-### Example Output
-
-Match Score: 82%
-
-Missing Skills: - Kubernetes - Kafka
-
-### Table: job_matches
-
-  Field            Type
-  ---------------- -----------
-  user_id          uuid
-  job_id           uuid
-  score            float
-  missing_skills   text\[\]
-  created_at       timestamp
-
-------------------------------------------------------------------------
-
-# 4. AI Resume Generator
-
-Automatically generates a customized resume for each job.
-
-### Input
-
--   User CV
--   Job description
-
-### Pipeline
-
-1.  Parse job requirements
-2.  Extract relevant sections from original CV
-3.  Rewrite experience to match job keywords
-4.  Optimize for ATS systems
-
-### Output
-
--   Tailored Resume (PDF)
-
-### Table: generated_resumes
-
-  Field        Type
-  ------------ -----------
+### 5. Gmail Integration — Auto-create Applications
+
+Parse the user's Gmail inbox to automatically detect job-related emails and create application records.
+
+**Flow:**
+1. User grants Gmail read scope during (or after) Google OAuth
+2. A background job polls the inbox periodically for emails matching patterns like:
+   - "Thank you for applying to…"
+   - "Your application at…"
+   - "We received your application…"
+3. Extract company name, role, and date from the email body (LLM or regex)
+4. Create or update a row in `applications` with status `applied`
+
+**API endpoints to add:**
+```
+POST /auth/google/gmail-connect    -- request Gmail scope
+GET  /integrations/gmail/sync      -- trigger manual sync
+```
+
+**Notes:**
+- Store the Gmail `history_id` so incremental syncs are cheap
+- Never store the full email body — extract fields and discard
+- Make this opt-in; not every user will want it
+
+---
+
+### 6. Interview Prep
+
+Give users AI-generated practice questions tailored to a specific job they matched with.
+
+**Features:**
+- Generate 10–15 interview questions from the job description + user CV
+- Categorize questions: behavioral, technical, role-specific
+- Let the user type an answer and get AI feedback on it
+- Save a "prep session" so the user can revisit it
+
+**Endpoints:**
+```
+POST /interview/prep/{job_id}     -- generate questions for a job
+POST /interview/answer            -- submit answer, get AI feedback
+GET  /interview/sessions          -- list past prep sessions
+```
+
+**DB:**
+```
+interview_sessions
   id           uuid
   user_id      uuid
   job_id       uuid
-  file_path    string
+  questions    jsonb   -- [{question, category, model_answer}]
   created_at   timestamp
 
-------------------------------------------------------------------------
-
-# 5. Notification Service
-
-Notifies the user when a strong job match is found.
-
-### Trigger
-
-    match_score > user_threshold
-
-### Notification Channels
-
--   Email
--   Push notifications
--   Telegram / Slack (future)
-
-### Example Message
-
-New Job Match Found
-
-Role: Backend Engineer\
-Match Score: 87%
-
-A tailored resume has been generated.
-
-------------------------------------------------------------------------
-
-# 6. Application Tracking
-
-Users can track their job applications.
-
-### Table: applications
-
-  Field     Type
-  --------- ------
-  user_id   uuid
-  job_id    uuid
-  status    enum
-
-### Status values
-
--   saved
--   applied
--   interview
--   rejected
--   offer
-
-------------------------------------------------------------------------
-
-# 7. AI Skill Gap Analyzer
-
-Analyzes what skills the user is missing for target roles.
-
-### Pipeline
-
-1.  Collect jobs the user applied to
-2.  Extract required skills
-3.  Compare with user's CV
-
-### Example Output
-
-Missing Skills:
-
--   Docker
--   GraphQL
--   AWS
-
-------------------------------------------------------------------------
-
-# 8. Job Scraper Architecture
-
-Scrapers run as background workers.
-
-### Scraper Worker
-
-Uses Playwright automation.
-
-### Flow
-
-1.  Open job search page
-2.  Extract job listings
-3.  Push job data into queue
-4.  Parser worker processes jobs
-
-### Queues
-
--   job_scraping_queue
--   job_parser_queue
-
-------------------------------------------------------------------------
-
-# 9. Matching Worker
-
-Triggered when new jobs appear.
-
-### Workflow
-
-1.  Fetch user filters
-2.  Compute similarity score
-3.  Store match results
-4.  Trigger resume generation
-
-------------------------------------------------------------------------
-
-# 10. AI Modules
-
-## Resume Parser
-
-Extracts:
-
--   skills
--   experience
--   education
-
-## Job Parser
-
-Extracts:
-
--   required skills
--   seniority level
--   technologies
-
-------------------------------------------------------------------------
-
-# 11. API Endpoints
-
-## Authentication
-
-POST /auth/register\
-POST /auth/login
-
-## CV
-
-POST /cv/upload\
-GET /cv
-
-## Jobs
-
-GET /jobs/matches\
-GET /jobs/{id}
-
-## Resume
-
-POST /resume/generate\
-GET /resume/{id}
-
-------------------------------------------------------------------------
-
-# 12. Data Flow
-
-    User uploads CV
-            │
-            ▼
-    CV parsed
-            │
-            ▼
-    Jobs scraped
-            │
-            ▼
-    Matching engine
-            │
-            ▼
-    Score calculated
-            │
-            ▼
-    Resume generated
-            │
-            ▼
-    Notification sent
-
-------------------------------------------------------------------------
-
-# 13. Security
-
--   JWT authentication
--   Rate limiting
--   Encrypted CV storage
--   Secure file uploads
-
-------------------------------------------------------------------------
-
-# 14. Scalability
-
-Workers can be scaled independently.
-
-Worker types:
-
--   Scrapers
--   Matchers
--   Resume generators
-
-Queues:
-
--   job_scraping_queue
--   matching_queue
--   resume_queue
-
-------------------------------------------------------------------------
-
-# 15. MVP Scope
-
-Initial version should include:
-
-1.  User registration
-2.  CV upload
-3.  LinkedIn job scraping
-4.  Job matching
-5.  Email notifications
-
-Features to postpone:
-
--   Auto-apply to jobs
--   Networking suggestions
--   Advanced analytics
-
-------------------------------------------------------------------------
-
-# 16. Development Phases
-
-### Phase 1
-
-Authentication + CV upload
-
-### Phase 2
-
-Job scraper
-
-### Phase 3
-
-Matching engine
-
-### Phase 4
-
-Resume generator
-
-### Phase 5
-
-Notifications
-
-------------------------------------------------------------------------
-
-# 17. Repository Structure
-
-    jobhunter-ai/
-
-    backend/
-      auth/
-      users/
-      jobs/
-      matching/
-      ai/
-      notifications/
-
-    workers/
-      scraper/
-      matcher/
-      resume/
-
-    frontend/
-
-------------------------------------------------------------------------
-
-# Future Features
-
--   Auto job applications
--   Interview question generator
--   Networking suggestions
--   Salary prediction
+interview_answers
+  id             uuid
+  session_id     uuid
+  question_index int
+  user_answer    text
+  feedback       text
+  score          float
+  created_at     timestamp
+```
+
+---
+
+### 7. Tests
+
+No tests exist right now. This is risky as the codebase grows.
+
+**Priority order:**
+1. **Unit tests** for the matcher (`app/services/matcher.py`) — pure functions, easy to cover
+2. **Unit tests** for scraper parsers — mock the HTML, assert extracted fields
+3. **Integration tests** for API endpoints — use `httpx.AsyncClient` + a test DB
+4. **E2E test** for the full scrape → match pipeline
+
+**Tooling:**
+- `pytest` + `pytest-asyncio` for async tests
+- `httpx` for API integration tests
+- `respx` for mocking external HTTP calls (LinkedIn, OpenAI)
+- `factory-boy` for generating test DB fixtures
+
+**Target:** at minimum 80% coverage on `app/services/` and `app/api/`
+
+---
+
+### 8. Per-User Jobs Mechanism
+
+Right now jobs are global. There is no clear model for how each logged-in user sees their own relevant jobs.
+
+**The problem:**
+- Scraped jobs sit in one shared `jobs` table
+- Matching runs but there is no clean way to surface "my jobs" vs. "all jobs"
+- New users who join after a scrape run never get matches for jobs already in the DB
+
+**Proposed model:**
+
+```
+jobs  (shared, global)
+  └── job_matches  (per user)
+        user_id, job_id, score, missing_skills, seen, saved, dismissed
+```
+
+**Rules:**
+- When a new scrape run finishes → trigger matching for ALL active users
+- When a new user signs up → run matching immediately against all existing jobs in the DB
+- User can `dismiss` a job (hide it forever), `save` it, or `apply` (moves to Kanban)
+- The frontend "Jobs" page only shows `job_matches` for the logged-in user, ordered by score
+
+**Endpoint changes:**
+```
+GET  /jobs/feed           -- user's personalized ranked feed (replaces GET /jobs/matches)
+POST /jobs/{id}/dismiss   -- hide a job for this user
+POST /jobs/{id}/save      -- save for later
+```
+
+**DB change:**
+```
+job_matches:
+  + seen        boolean  default false
+  + saved       boolean  default false
+  + dismissed   boolean  default false
+```
+
+---
+
+## Rough Priority Order
+
+| # | Feature                    | Effort | Impact |
+|---|----------------------------|--------|--------|
+| 1 | No-duplicate scraping      | Low    | High   |
+| 2 | Per-user jobs mechanism    | Medium | High   |
+| 3 | Free CV storage            | Low    | Medium |
+| 4 | Better LinkedIn scraping   | Medium | High   |
+| 5 | Tests                      | Medium | High   |
+| 6 | Google OAuth               | Medium | Medium |
+| 7 | Gmail integration          | High   | Medium |
+| 8 | Interview prep             | High   | Medium |

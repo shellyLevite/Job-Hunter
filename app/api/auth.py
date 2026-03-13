@@ -1,4 +1,12 @@
-"""Authentication router.
+"""Authentication router — Google OAuth 2.0 only.
+
+Flow
+────
+  1. Browser → GET /auth/google/login
+               Redirects to Google's consent screen.
+  2. Google  → GET /auth/google/callback?code=...
+               Exchanges code for user info, creates/finds user,
+               sets httpOnly cookies, redirects to the frontend.
 
 Tokens are issued as httpOnly cookies so they are never accessible from
 JavaScript, eliminating the XSS-based token-theft vector.
@@ -13,34 +21,30 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from supabase import Client
 
 from app.core.config import settings
 from app.db import crud
 from app.db.session import get_supabase
-from app.schemas import UserCreate, UserRead
+from app.schemas import UserRead
 
 router = APIRouter()
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 _COOKIE_ACCESS = "access_token"
 _COOKIE_REFRESH = "refresh_token"
 
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
 
 # ── Token helpers ─────────────────────────────────────────────────────────────
-
-def _hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def _verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
 
 def _create_access_token(email: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -69,7 +73,7 @@ def _set_auth_cookies(response: Response, email: str) -> None:
         secure=settings.SECURE_COOKIES,
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400,
-        path="/auth/refresh",  # browser only sends this cookie to /auth/refresh
+        path="/auth/refresh",
     )
 
 
@@ -101,28 +105,64 @@ def get_current_user(
     return UserRead(email=user["email"])
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Google OAuth ──────────────────────────────────────────────────────────────
 
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def register(user: UserCreate, response: Response, client: Client = Depends(get_supabase)):
-    if crud.get_user_by_email(client, user.email):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+@router.get("/google/login")
+def google_login():
+    """Redirect the browser to Google's OAuth consent screen."""
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    return RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
 
-    hashed_password = _hash_password(user.password)
-    created = crud.create_user(client, email=user.email, hashed_password=hashed_password)
-    _set_auth_cookies(response, created["email"])
-    return UserRead(email=created["email"])
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str,
+    client: Client = Depends(get_supabase),
+):
+    """Exchange the authorization code, find/create the user, set cookies, redirect to frontend."""
+    async with httpx.AsyncClient() as http:
+        token_res = await http.post(
+            _GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": settings.GOOGLE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+        )
+        token_data = token_res.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Google token exchange failed")
+
+        userinfo_res = await http.get(
+            _GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        userinfo = userinfo_res.json()
+
+    email: Optional[str] = userinfo.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Could not retrieve email from Google")
+
+    user = crud.get_user_by_email(client, email)
+    if not user:
+        user = crud.create_google_user(client, email=email)
+
+    redirect = RedirectResponse(url=settings.FRONTEND_URL, status_code=302)
+    _set_auth_cookies(redirect, email)
+    return redirect
 
 
-@router.post("/login", response_model=UserRead)
-def login(user: UserCreate, response: Response, client: Client = Depends(get_supabase)):
-    stored = crud.get_user_by_email(client, user.email)
-    if not stored or not _verify_password(user.password, stored["hashed_password"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-
-    _set_auth_cookies(response, stored["email"])
-    return UserRead(email=stored["email"])
-
+# ── Common endpoints ──────────────────────────────────────────────────────────
 
 @router.get("/me", response_model=UserRead)
 def me(current_user: UserRead = Depends(get_current_user)):

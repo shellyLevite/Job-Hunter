@@ -1,81 +1,31 @@
-import { useState, type FormEvent } from 'react'
-import { useAuth } from '../AuthContext'
+const BACKEND = import.meta.env.VITE_API_URL ?? ''
 
 export default function LoginPage() {
-  const { login, register } = useAuth()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [isRegister, setIsRegister] = useState(false)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setLoading(true)
-    try {
-      if (isRegister) await register(email, password)
-      else await login(email, password)
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
-      let msg = 'Something went wrong'
-      if (typeof detail === 'string') msg = detail
-      else if (Array.isArray(detail)) msg = detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join(', ')
-      else if (detail) msg = JSON.stringify(detail)
-      setError(msg)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-      <div className="bg-gray-900 rounded-2xl shadow-xl p-8 w-full max-w-sm">
+      <div className="bg-gray-900 rounded-2xl shadow-xl p-8 w-full max-w-sm text-center">
         <h1 className="text-2xl font-bold text-white mb-1">JobHunter AI</h1>
-        <p className="text-gray-400 text-sm mb-6">{isRegister ? 'Create an account' : 'Sign in to continue'}</p>
+        <p className="text-gray-400 text-sm mb-8">Sign in to continue</p>
 
-        {error && (
-          <div className="bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-3 mb-4 text-sm">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            className="w-full bg-gray-800 text-white rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-500"
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            className="w-full bg-gray-800 text-white rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-500"
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold rounded-lg py-2.5 transition-colors"
-          >
-            {loading ? 'Loading…' : isRegister ? 'Register' : 'Sign In'}
-          </button>
-        </form>
-
-        <p className="text-gray-500 text-sm text-center mt-5">
-          {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <button
-            onClick={() => setIsRegister(!isRegister)}
-            className="text-indigo-400 hover:text-indigo-300 font-medium"
-          >
-            {isRegister ? 'Sign in' : 'Register'}
-          </button>
-        </p>
+        <a
+          href={`${BACKEND}/auth/google/login`}
+          className="flex items-center justify-center gap-3 w-full bg-white hover:bg-gray-100 text-gray-800 font-semibold rounded-lg py-2.5 transition-colors"
+        >
+          <GoogleIcon />
+          Sign in with Google
+        </a>
       </div>
     </div>
+  )
+}
+
+function GoogleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+      <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908C16.658 14.013 17.64 11.705 17.64 9.2z" />
+      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" />
+      <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" />
+      <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z" />
+    </svg>
   )
 }

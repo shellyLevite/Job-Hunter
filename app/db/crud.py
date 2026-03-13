@@ -32,6 +32,18 @@ def create_user(client: Client, email: str, hashed_password: str) -> Dict[str, A
     return response.data[0]
 
 
+def create_google_user(client: Client, email: str) -> Dict[str, Any]:
+    """Insert a new user row for a Google-authenticated user (no password)."""
+    payload = {
+        "id": str(uuid.uuid4()),
+        "email": email,
+        "hashed_password": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = client.table("users").insert(payload).execute()
+    return response.data[0]
+
+
 def create_cv_record(
     client: Client,
     user_id: str,
