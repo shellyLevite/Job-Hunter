@@ -48,3 +48,47 @@ def create_cv_record(
     }
     response = client.table("cvs").insert(payload).execute()
     return response.data[0]
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+
+def upsert_job(client: Client, job: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert a job or update it if the URL already exists."""
+    payload = {
+        "id": str(uuid.uuid4()),
+        "title": job["title"],
+        "company": job["company"],
+        "location": job.get("location"),
+        "description": job.get("description"),
+        "source": job["source"],
+        "url": job["url"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = (
+        client.table("jobs")
+        .upsert(payload, on_conflict="url")
+        .execute()
+    )
+    return response.data[0]
+
+
+def get_jobs(
+    client: Client,
+    source: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Dict[str, Any]]:
+    """Return a paginated list of jobs, optionally filtered by source."""
+    query = client.table("jobs").select("*").order("created_at", desc=True).range(offset, offset + limit - 1)
+    if source:
+        query = query.eq("source", source)
+    return query.execute().data
+
+
+def get_job_by_id(client: Client, job_id: str) -> Optional[Dict[str, Any]]:
+    """Return a single job row or None."""
+    rows = client.table("jobs").select("*").eq("id", job_id).limit(1).execute().data
+    return rows[0] if rows else None
+

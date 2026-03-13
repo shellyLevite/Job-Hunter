@@ -14,6 +14,16 @@ cvs table (SQL):
   file_path       text not null
   parsed_content  text
   created_at      timestamptz default now()
+
+jobs table (SQL):
+  id          uuid primary key default gen_random_uuid()
+  title       text not null
+  company     text not null
+  location    text
+  description text
+  source      text not null
+  url         text unique not null
+  created_at  timestamptz default now()
 """
 
 from datetime import datetime
@@ -34,4 +44,15 @@ class CVRow(BaseModel):
     user_id: str
     file_path: str
     parsed_content: Optional[str] = None
+    created_at: datetime
+
+
+class JobRow(BaseModel):
+    id: str
+    title: str
+    company: str
+    location: Optional[str] = None
+    description: Optional[str] = None
+    source: str
+    url: str
     created_at: datetime
