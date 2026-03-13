@@ -1,21 +1,10 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, cv, jobs, applications
 from app.core.config import settings
-from app.services.scheduler import start_scheduler, stop_scheduler
 
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    start_scheduler()
-    yield
-    stop_scheduler()
-
-
-app = FastAPI(title="JobHunter AI", lifespan=lifespan)
+app = FastAPI(title="JobHunter AI")
 
 app.add_middleware(
     CORSMiddleware,

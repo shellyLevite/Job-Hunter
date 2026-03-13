@@ -60,6 +60,27 @@ export interface Job {
   created_at: string
 }
 
+// Returned by /jobs/search — not yet in DB, may carry ranking metadata
+export interface JobSearchResult {
+  title: string
+  company: string
+  location?: string
+  description?: string
+  source: string
+  url: string
+  // Present only when the user has an uploaded CV
+  score?: number
+  strong_match?: boolean
+  missing_skills?: string[]
+}
+
+export interface SearchResponse {
+  jobs: JobSearchResult[]
+  cv_missing: boolean
+  cached: boolean
+  total: number
+}
+
 export interface Application {
   id: string
   user_id: string
@@ -85,13 +106,25 @@ export const logoutApi = async () => {
 
 // ── Jobs ───────────────────────────────────────────────────────────────────
 
-export const fetchJobs = async (limit = 25, offset = 0): Promise<Job[]> => {
-  const { data } = await api.get('/jobs/', { params: { limit, offset } })
+export interface SearchParams {
+  query: string
+  location: string
+  sources: string[]
+  max_results?: number
+  posted_within?: string
+}
+
+export const searchJobs = async (params: SearchParams): Promise<SearchResponse> => {
+  const { data } = await api.post('/jobs/search', params)
   return data
 }
 
-export const fetchMatches = async () => {
-  const { data } = await api.get('/jobs/matches')
+export const trackJob = async (
+  action: 'save' | 'apply',
+  job: JobSearchResult,
+  notes?: string,
+): Promise<Application> => {
+  const { data } = await api.post('/jobs/action', { action, job, notes })
   return data
 }
 

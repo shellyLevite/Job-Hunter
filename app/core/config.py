@@ -15,24 +15,18 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = ""
     STORAGE_BUCKET: str = "CVS"
 
-    # Scraper config
-    SCRAPE_QUERY: str = "software engineer"
-    SCRAPE_LOCATION: str = "Tel Aviv"
-    SCRAPE_SOURCES: str = "linkedin,indeed"
-    SCRAPE_MAX: int = 50
-
     # AI / matching
     GROQ_API_KEY: str = ""
-    MATCH_THRESHOLD: float = 0.60  # minimum score to persist a match
+    MATCH_THRESHOLD: float = 0.10  # minimum score to persist a match
 
     # Google OAuth
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
-    FRONTEND_URL: str = "http://localhost:5173"
+    FRONTEND_URL: str = "http://localhost:5174"
 
     # CORS — comma-separated list of allowed origins
-    CORS_ORIGINS: str = "http://localhost:5173"
+    CORS_ORIGINS: str = "http://localhost:5174"
 
     @field_validator("SECRET_KEY")
     @classmethod

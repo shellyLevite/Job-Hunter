@@ -105,6 +105,44 @@ def get_current_user(
     return UserRead(email=user["email"])
 
 
+def get_current_user_optional(
+    request: Request,
+    client: Client = Depends(get_supabase),
+) -> Optional[UserRead]:
+    """Like get_current_user but returns None instead of raising 401.
+    Falls back to the refresh token when the access token is expired,
+    so ranking still works after the 30-min access-token window.
+    """
+    token = request.cookies.get(_COOKIE_ACCESS)
+    email: Optional[str] = None
+
+    if token:
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            email = payload.get("sub")
+        except JWTError:
+            pass  # try refresh token below
+
+    # Access token missing or expired — try the refresh token as a fallback
+    if email is None:
+        refresh = request.cookies.get(_COOKIE_REFRESH)
+        if refresh:
+            try:
+                payload = jwt.decode(refresh, settings.REFRESH_SECRET_KEY, algorithms=[settings.ALGORITHM])
+                email = payload.get("sub")
+            except JWTError:
+                return None
+        else:
+            return None
+
+    if email is None:
+        return None
+    user = crud.get_user_by_email(client, email)
+    if user is None:
+        return None
+    return UserRead(email=user["email"])
+
+
 # ── Google OAuth ──────────────────────────────────────────────────────────────
 
 @router.get("/google/login")

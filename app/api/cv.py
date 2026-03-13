@@ -1,3 +1,5 @@
+import io
+import logging
 import re
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from app.core.config import settings
 from app.db import crud
 from app.db.session import get_supabase
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt"}
@@ -29,6 +32,29 @@ def _safe_filename(email: str, original: str) -> str:
     safe = re.sub(r"[^\w.\-]", "_", base)
     safe_email = re.sub(r"[^\w.\-]", "_", email)
     return f"{safe_email}/{safe}"
+
+
+def _extract_text(content: bytes, suffix: str) -> str:
+    """Extract plain text from PDF, DOCX, or TXT bytes."""
+    try:
+        if suffix == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content))
+            return "\n".join(
+                page.extract_text() or "" for page in reader.pages
+            ).strip()
+        elif suffix in (".docx",):
+            from docx import Document
+            doc = Document(io.BytesIO(content))
+            return "\n".join(p.text for p in doc.paragraphs).strip()
+        elif suffix == ".doc":
+            # .doc is legacy binary format — return empty, user should use .docx or .pdf
+            return ""
+        else:  # .txt
+            return content.decode("utf-8", errors="replace").strip()
+    except Exception as exc:
+        logger.warning("CV text extraction failed for suffix=%s: %s", suffix, exc)
+        return ""
 
 
 @router.post("/upload")
@@ -79,10 +105,12 @@ def upload_cv(
 
     stored_user = crud.get_user_by_email(client, user.email)
     if stored_user:
+        parsed_text = _extract_text(content, suffix)
         crud.create_cv_record(
             client,
             user_id=stored_user["id"],
             file_path=storage_path,
+            parsed_content=parsed_text or None,
         )
 
     return JSONResponse({"storage_path": storage_path, "signed_url": signed_url})

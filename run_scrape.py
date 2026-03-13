@@ -11,7 +11,6 @@ from app.core.config import settings
 from app.db.session import get_supabase
 from app.db import crud
 from app.services.scraper.linkedin import LinkedInScraper
-from app.services.scraper.indeed import IndeedScraper
 
 QUERY    = settings.SCRAPE_QUERY
 LOCATION = settings.SCRAPE_LOCATION
@@ -68,7 +67,6 @@ async def main():
     # 2 — run scrapers
     scrapers = [
         ("LinkedIn", LinkedInScraper()),
-        ("Indeed",   IndeedScraper()),
     ]
 
     all_jobs = []

@@ -68,19 +68,23 @@ class LinkedInScraper(BaseJobScraper):
         query: str,
         location: str,
         max_results: int = 50,
+        posted_within: str | None = None,
     ) -> List[Dict[str, Any]]:
         jobs: List[Dict[str, Any]] = []
         start = 0
+        # Default to 7 days if no filter specified
+        time_filter = posted_within if posted_within else "r604800"
 
         async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
-            # ── Phase 1: collect job cards ──────────────────────────────────
+            # ── Phase 1: collect job cards ──────────────────────────────────────────────
             while len(jobs) < max_results:
-                params = {
+                params: dict = {
                     "keywords": query,
                     "location": location,
-                    "f_TPR": "r86400",  # posted in last 24 hours
                     "start": start,
                 }
+                if time_filter:
+                    params["f_TPR"] = time_filter
                 url = f"{_GUEST_API}?{urlencode(params)}"
 
                 try:

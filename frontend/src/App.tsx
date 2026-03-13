@@ -74,7 +74,6 @@ export default function App() {
           </>
         ) : tab === 'jobs' ? (
           <>
-            <h2 className="flex-shrink-0 text-xl font-bold mb-4">Job Listings</h2>
             <div className="flex-1 min-h-0 overflow-y-auto">
               <JobsPage />
             </div>

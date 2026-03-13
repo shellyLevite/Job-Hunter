@@ -13,6 +13,7 @@ class BaseJobScraper(ABC):
         query: str,
         location: str,
         max_results: int = 50,
+        posted_within: str | None = None,
     ) -> List[Dict[str, Any]]:
         """Scrape jobs and return a list of normalised job dicts.
 
