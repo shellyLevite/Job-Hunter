@@ -1,17 +1,15 @@
 """Job Matching Engine.
 
 Pipeline for each (user_cv, job) pair:
-  1. Extract skills from the CV and job description via GPT-4o-mini
+  1. Extract skills from the CV and job description via Groq / Llama-3
   2. Compute a match score = |cv_skills ∩ job_skills| / |job_skills|
   3. Identify missing skills = job_skills - cv_skills
   4. Persist to job_matches table if score >= MATCH_THRESHOLD
-
-Embeddings-based semantic similarity is used as a fallback when
-skill extraction returns too few terms.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List
@@ -98,9 +96,6 @@ class MatchingEngine:
         )
 
         return self._compute_score(cv_skills, job_skills)
-
-
-import asyncio  # noqa: E402 — keep at bottom to avoid circular import issues
 
 
 _engine: MatchingEngine | None = None

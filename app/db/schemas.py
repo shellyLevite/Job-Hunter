@@ -33,6 +33,17 @@ job_matches table (SQL):
   missing_skills text[]
   created_at     timestamptz default now()
   unique(user_id, job_id)
+
+applications table (SQL):
+  id         uuid primary key default gen_random_uuid()
+  user_id    uuid not null references users(id)
+  job_id     uuid not null references jobs(id)
+  status     text not null default 'saved'
+  notes      text
+  applied_at timestamptz
+  created_at timestamptz default now()
+  updated_at timestamptz default now()
+  unique(user_id, job_id)
 """
 
 from datetime import datetime
@@ -74,3 +85,14 @@ class JobMatchRow(BaseModel):
     score: float
     missing_skills: list[str]
     created_at: datetime
+
+
+class ApplicationRow(BaseModel):
+    id: str
+    user_id: str
+    job_id: str
+    status: str  # saved | applied | interview | rejected | offer
+    notes: Optional[str] = None
+    applied_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime

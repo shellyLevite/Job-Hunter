@@ -4,10 +4,11 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from supabase import Client
 
-from app.api.auth import get_current_user, UserRead
+from app.api.auth import get_current_user
 from app.core.config import settings
 from app.db import crud
 from app.db.session import get_supabase
+from app.schemas import UserRead
 from app.services.matcher import get_matching_engine
 
 router = APIRouter()
@@ -30,7 +31,8 @@ async def run_matching(
     client: Client = Depends(get_supabase),
 ):
     """Trigger the matching engine for the current user against all recent jobs."""
-    cv = crud.get_user_cv(client, user_id=_get_user_id(client, user.email))
+    user_id = _get_user_id(client, user.email)
+    cv = crud.get_user_cv(client, user_id=user_id)
     if not cv or not cv.get("parsed_content"):
         raise HTTPException(status_code=400, detail="No parsed CV found. Upload a CV first.")
 
@@ -39,7 +41,6 @@ async def run_matching(
         return {"matched": 0}
 
     engine = get_matching_engine()
-    user_id = _get_user_id(client, user.email)
     saved = 0
 
     for job in jobs:

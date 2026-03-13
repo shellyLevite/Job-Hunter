@@ -1,7 +1,7 @@
 """Background scheduler — runs scrapers every 10 minutes.
 
-The scheduler reads scrape targets from environment variables so you can
-configure them without changing code:
+The scheduler reads scrape targets from the central Settings object.
+Configure via environment variables / .env file:
 
   SCRAPE_QUERY    = "software engineer"   (default)
   SCRAPE_LOCATION = "Tel Aviv"            (default)
@@ -11,10 +11,10 @@ configure them without changing code:
 
 import asyncio
 import logging
-import os
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from app.core.config import settings
 from app.db.session import get_supabase
 from app.db import crud
 from app.services.scraper.linkedin import LinkedInScraper
@@ -32,10 +32,10 @@ _SCRAPERS = {
 
 async def run_scrapers() -> None:
     """Fetch jobs from all configured sources and upsert them into Supabase."""
-    query = os.getenv("SCRAPE_QUERY", "software engineer")
-    location = os.getenv("SCRAPE_LOCATION", "Tel Aviv")
-    sources = [s.strip() for s in os.getenv("SCRAPE_SOURCES", "linkedin,indeed").split(",")]
-    max_results = int(os.getenv("SCRAPE_MAX", "50"))
+    query = settings.SCRAPE_QUERY
+    location = settings.SCRAPE_LOCATION
+    sources = [s.strip() for s in settings.SCRAPE_SOURCES.split(",")]
+    max_results = settings.SCRAPE_MAX
 
     client = get_supabase()
     total = 0

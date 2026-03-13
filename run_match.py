@@ -3,10 +3,10 @@ End-to-end matching smoke test.
 Requires:
   - jobs table populated (run run_scrape.py first)
   - A user with a parsed CV in the DB
-  - OPENAI_API_KEY in .env
+  - GROQ_API_KEY in .env
 
-Usage:
-  .venv/Scripts/python.exe run_match.py --email you@example.com
+Usage (from project root):
+  python run_match.py --email you@example.com
 
 Supabase SQL to create job_matches table (run once in dashboard):
 
@@ -22,10 +22,8 @@ Supabase SQL to create job_matches table (run once in dashboard):
 """
 import argparse
 import asyncio
-import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
 from dotenv import load_dotenv
 load_dotenv()
 

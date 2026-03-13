@@ -1,25 +1,21 @@
 """
 Real end-to-end scrape runner.
-Usage:  .venv/Scripts/python.exe run_scrape.py
+Usage (from project root):  python run_scrape.py
 """
 import asyncio
-import os
-import sys
-
-# Make sure app imports work
-sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
 load_dotenv()
 
+from app.core.config import settings
 from app.db.session import get_supabase
 from app.db import crud
 from app.services.scraper.linkedin import LinkedInScraper
 from app.services.scraper.indeed import IndeedScraper
 
-QUERY    = os.getenv("SCRAPE_QUERY", "software engineer")
-LOCATION = os.getenv("SCRAPE_LOCATION", "Tel Aviv")
-MAX      = int(os.getenv("SCRAPE_MAX", "10"))
+QUERY    = settings.SCRAPE_QUERY
+LOCATION = settings.SCRAPE_LOCATION
+MAX      = settings.SCRAPE_MAX
 
 DDL = """
 -- Run this once in the Supabase SQL Editor (https://supabase.com/dashboard/project/_/sql)

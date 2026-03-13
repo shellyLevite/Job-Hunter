@@ -154,3 +154,111 @@ def get_user_cv(client: Client, user_id: str) -> Optional[Dict[str, Any]]:
     )
     return rows[0] if rows else None
 
+
+# ---------------------------------------------------------------------------
+# Applications
+# ---------------------------------------------------------------------------
+
+_VALID_STATUSES = {"saved", "applied", "interview", "rejected", "offer"}
+
+
+def create_application(
+    client: Client,
+    user_id: str,
+    job_id: str,
+    status: str = "saved",
+    notes: Optional[str] = None,
+    applied_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Add a job to the user's application tracker."""
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "job_id": job_id,
+        "status": status if status in _VALID_STATUSES else "saved",
+        "notes": notes,
+        "applied_at": applied_at,
+        "created_at": now,
+        "updated_at": now,
+    }
+    return client.table("applications").insert(payload).execute().data[0]
+
+
+def get_applications_for_user(
+    client: Client,
+    user_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Dict[str, Any]]:
+    """Return a user's applications joined with job data, newest first."""
+    q = (
+        client.table("applications")
+        .select("*, jobs(*)")
+        .eq("user_id", user_id)
+        .order("updated_at", desc=True)
+        .range(offset, offset + limit - 1)
+    )
+    if status:
+        q = q.eq("status", status)
+    return q.execute().data
+
+
+def get_application_by_id(
+    client: Client,
+    application_id: str,
+    user_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Return a single application owned by user_id, or None."""
+    rows = (
+        client.table("applications")
+        .select("*, jobs(*)")
+        .eq("id", application_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
+def update_application(
+    client: Client,
+    application_id: str,
+    user_id: str,
+    **fields,
+) -> Optional[Dict[str, Any]]:
+    """Patch allowed fields on an application; returns updated row or None."""
+    allowed = {"status", "notes", "applied_at"}
+    patch = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not patch:
+        return get_application_by_id(client, application_id, user_id)
+    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+    rows = (
+        client.table("applications")
+        .update(patch)
+        .eq("id", application_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
+def delete_application(
+    client: Client,
+    application_id: str,
+    user_id: str,
+) -> bool:
+    """Delete an application; returns True if a row was deleted."""
+    rows = (
+        client.table("applications")
+        .delete()
+        .eq("id", application_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+    )
+    return len(rows) > 0
+
