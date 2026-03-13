@@ -2,18 +2,21 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status, Depends
-from pydantic import BaseModel, EmailStr
-from passlib.context import CryptContext
+from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr
+from supabase import Client
 
 from app.core.config import settings
+from app.db import crud
+from app.db.session import get_supabase
 
 router = APIRouter()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-# In-memory user store (replace with persistent DB in later phases)
-_USERS = {}
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class UserCreate(BaseModel):
@@ -45,23 +48,42 @@ def _create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    client: Client = Depends(get_supabase),
+) -> UserRead:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = crud.get_user_by_email(client, email)
+    if user is None:
+        raise credentials_exception
+    return UserRead(email=user["email"])
+
+
 @router.post("/register", response_model=UserRead)
-def register(user: UserCreate):
-    if user.email in _USERS:
+def register(user: UserCreate, client: Client = Depends(get_supabase)):
+    if crud.get_user_by_email(client, user.email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
-    _USERS[user.email] = {
-        "email": user.email,
-        "hashed_password": _hash_password(user.password),
-        "created_at": datetime.utcnow(),
-    }
-
-    return {"email": user.email}
+    hashed_password = _hash_password(user.password)
+    created = crud.create_user(client, email=user.email, hashed_password=hashed_password)
+    return {"email": created["email"]}
 
 
 @router.post("/login", response_model=Token)
-def login(user: UserCreate):
-    stored = _USERS.get(user.email)
+def login(user: UserCreate, client: Client = Depends(get_supabase)):
+    stored = crud.get_user_by_email(client, user.email)
     if not stored or not _verify_password(user.password, stored["hashed_password"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
