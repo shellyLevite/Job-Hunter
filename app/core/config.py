@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     SCRAPE_SOURCES: str = "linkedin,indeed"
     SCRAPE_MAX: int = 50
 
+    # AI / matching
+    GROQ_API_KEY: str = ""
+    MATCH_THRESHOLD: float = 0.60  # minimum score to persist a match
+
     class Config:
         env_file = ".env"
         extra = "ignore"

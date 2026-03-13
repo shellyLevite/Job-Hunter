@@ -79,12 +79,26 @@ class IndeedScraper(BaseJobScraper):
                         if not title or not job_url:
                             continue
 
+                        # Fetch description from right-side panel
+                        description = ""
+                        try:
+                            if link_el:
+                                await link_el.click()
+                                await page.wait_for_selector(
+                                    "div#jobDescriptionText", timeout=6_000
+                                )
+                                desc_el = await page.query_selector("div#jobDescriptionText")
+                                if desc_el:
+                                    description = (await desc_el.inner_text()).strip()
+                        except Exception:  # noqa: BLE001
+                            pass  # description stays empty — matching falls back to title
+
                         jobs.append(
                             {
                                 "title": title,
                                 "company": company,
                                 "location": location_text,
-                                "description": None,
+                                "description": description or None,
                                 "source": self.source,
                                 "url": job_url,
                             }

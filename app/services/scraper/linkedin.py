@@ -1,14 +1,16 @@
 """LinkedIn job scraper using the public guest jobs API.
 
-LinkedIn exposes a public endpoint used for SEO/indexing that requires
+LinkedIn exposes public endpoints used for SEO/indexing that require
 NO login, NO cookie, NO browser automation:
 
-  https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search
+  Listings : https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search
+  Detail   : https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}
 
-It returns lightweight HTML fragments — parsed here with BeautifulSoup.
-This approach carries no account-ban risk.
+Descriptions are fetched concurrently (up to 5 at a time) after the
+listing pass completes.  This approach carries no account-ban risk.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List
 from urllib.parse import urlencode
@@ -20,7 +22,9 @@ from app.services.scraper.base import BaseJobScraper
 
 logger = logging.getLogger(__name__)
 
-_GUEST_API = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+_GUEST_API  = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+_JOB_API    = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
+_DESC_CONC  = 5   # max concurrent description requests
 
 _HEADERS = {
     "User-Agent": (
@@ -36,6 +40,29 @@ _HEADERS = {
 class LinkedInScraper(BaseJobScraper):
     source = "linkedin"
 
+    async def _fetch_description(
+        self, client: httpx.AsyncClient, job_url: str
+    ) -> str:
+        """Fetch full job description from LinkedIn's public jobPosting API."""
+        try:
+            # Job ID is the last hyphen-delimited numeric segment
+            job_id = job_url.rstrip("/").split("-")[-1]
+            if not job_id.isdigit():
+                return ""
+            api_url = _JOB_API.format(job_id=job_id)
+            resp = await client.get(api_url, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "lxml")
+            desc_el = (
+                soup.find("div", class_="show-more-less-html__markup")
+                or soup.find("div", class_="description__text")
+            )
+            if desc_el:
+                return desc_el.get_text(separator=" ", strip=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("LinkedIn: description fetch error for %s: %s", job_url, exc)
+        return ""
+
     async def scrape(
         self,
         query: str,
@@ -46,6 +73,7 @@ class LinkedInScraper(BaseJobScraper):
         start = 0
 
         async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True, timeout=30) as client:
+            # ── Phase 1: collect job cards ──────────────────────────────────
             while len(jobs) < max_results:
                 params = {
                     "keywords": query,
@@ -96,6 +124,17 @@ class LinkedInScraper(BaseJobScraper):
                         logger.debug("LinkedIn: card parse error: %s", exc)
 
                 start += 25  # LinkedIn paginates in steps of 25
+
+            # ── Phase 2: fetch descriptions concurrently ─────────────────
+            sem = asyncio.Semaphore(_DESC_CONC)
+
+            async def _fetch(job: Dict[str, Any]) -> None:
+                async with sem:
+                    job["description"] = await self._fetch_description(client, job["url"])
+                    await asyncio.sleep(0.3)  # be polite
+
+            logger.info("LinkedIn: fetching descriptions for %d jobs…", len(jobs))
+            await asyncio.gather(*[_fetch(j) for j in jobs])
 
         logger.info("LinkedIn: scraped %d jobs for query=%r location=%r", len(jobs), query, location)
         return jobs[:max_results]

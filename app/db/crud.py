@@ -92,3 +92,65 @@ def get_job_by_id(client: Client, job_id: str) -> Optional[Dict[str, Any]]:
     rows = client.table("jobs").select("*").eq("id", job_id).limit(1).execute().data
     return rows[0] if rows else None
 
+
+# ---------------------------------------------------------------------------
+# Job Matches
+# ---------------------------------------------------------------------------
+
+def upsert_job_match(
+    client: Client,
+    user_id: str,
+    job_id: str,
+    score: float,
+    missing_skills: list[str],
+) -> Dict[str, Any]:
+    """Insert or replace a match record for a (user, job) pair."""
+    payload = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "job_id": job_id,
+        "score": round(score, 4),
+        "missing_skills": missing_skills,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = (
+        client.table("job_matches")
+        .upsert(payload, on_conflict="user_id,job_id")
+        .execute()
+    )
+    return response.data[0]
+
+
+def get_matches_for_user(
+    client: Client,
+    user_id: str,
+    min_score: float = 0.0,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Dict[str, Any]]:
+    """Return a user's matches joined with job details, ordered by score desc."""
+    response = (
+        client.table("job_matches")
+        .select("*, jobs(*)")
+        .eq("user_id", user_id)
+        .gte("score", min_score)
+        .order("score", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return response.data
+
+
+def get_user_cv(client: Client, user_id: str) -> Optional[Dict[str, Any]]:
+    """Return the most recent CV for a user, or None."""
+    rows = (
+        client.table("cvs")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+

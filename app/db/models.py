@@ -24,6 +24,15 @@ jobs table (SQL):
   source      text not null
   url         text unique not null
   created_at  timestamptz default now()
+
+job_matches table (SQL):
+  id             uuid primary key default gen_random_uuid()
+  user_id        uuid not null references users(id)
+  job_id         uuid not null references jobs(id)
+  score          float not null
+  missing_skills text[]
+  created_at     timestamptz default now()
+  unique(user_id, job_id)
 """
 
 from datetime import datetime
@@ -55,4 +64,13 @@ class JobRow(BaseModel):
     description: Optional[str] = None
     source: str
     url: str
+    created_at: datetime
+
+
+class JobMatchRow(BaseModel):
+    id: str
+    user_id: str
+    job_id: str
+    score: float
+    missing_skills: list[str]
     created_at: datetime
