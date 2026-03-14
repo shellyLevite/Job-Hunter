@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 import httpx
 from bs4 import BeautifulSoup
 
-from app.services.scraper.base import BaseJobScraper
+from backend.services.scraper.base import BaseJobScraper
 
 logger = logging.getLogger(__name__)
 

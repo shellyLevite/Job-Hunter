@@ -17,7 +17,7 @@ from typing import Any
 
 from groq import AsyncGroq
 
-from app.core.config import settings
+from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 

@@ -18,14 +18,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from supabase import Client
 
-from app.api.auth import get_current_user, get_current_user_optional
-from app.core.config import settings
-from app.db import crud
-from app.db.session import get_supabase
-from app.schemas import UserRead
-from app.api.cv import _extract_text  # TODO: relocate to app.services once cv_parser is extracted
-from app.services.matcher import get_matching_engine
-from app.services.scraper.linkedin import LinkedInScraper
+from backend.api.auth import get_current_user, get_current_user_optional
+from backend.core.config import settings
+from backend.db import crud
+from backend.db.session import get_supabase
+from backend.schemas import UserRead
+from backend.api.cv import _extract_text  # TODO: relocate to app.services once cv_parser is extracted
+from backend.services.matcher import get_matching_engine
+from backend.services.scraper.linkedin import LinkedInScraper
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

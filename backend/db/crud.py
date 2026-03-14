@@ -8,7 +8,7 @@ import uuid
 from cryptography.fernet import Fernet
 from supabase import Client
 
-from app.core.config import settings
+from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
