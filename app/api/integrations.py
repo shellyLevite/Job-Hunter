@@ -12,11 +12,11 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from supabase import Client
 
-from backend.api.auth import get_current_user
-from backend.db import crud
-from backend.db.session import get_supabase
-from backend.schemas import GmailImportRequest, GmailPreviewItem, UserRead
-from backend.services.gmail_parser import fetch_gmail_preview
+from app.api.auth import get_current_user
+from app.db import crud
+from app.db.session import get_supabase
+from app.schemas import GmailImportRequest, GmailPreviewItem, UserRead
+from app.services.gmail_parser import fetch_gmail_preview
 
 router = APIRouter()
 

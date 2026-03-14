@@ -32,10 +32,10 @@ from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
 from supabase import Client
 
-from backend.core.config import settings
-from backend.db import crud
-from backend.db.session import get_supabase
-from backend.schemas import UserRead
+from app.core.config import settings
+from app.db import crud
+from app.db.session import get_supabase
+from app.schemas import UserRead
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

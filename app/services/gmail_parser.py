@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from groq import AsyncGroq
 
-from backend.core.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
