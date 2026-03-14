@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
+from cryptography.fernet import Fernet
 from supabase import Client
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _fernet() -> Fernet:
+    """Return a Fernet instance using the configured encryption key."""
+    return Fernet(settings.GMAIL_TOKEN_ENCRYPTION_KEY.encode())
 
 
 def get_user_by_email(client: Client, email: str) -> Optional[Dict[str, Any]]:
@@ -234,4 +245,137 @@ def delete_application(
         .data
     )
     return len(rows) > 0
+
+
+# ---------------------------------------------------------------------------
+# Gmail Integration
+# ---------------------------------------------------------------------------
+
+
+def update_user_gmail_token(client: Client, user_id: str, refresh_token: str) -> None:
+    """Encrypt and store the Google OAuth refresh token (Gmail read access) for the user."""
+    encrypted = _fernet().encrypt(refresh_token.encode()).decode()
+    client.table("users").update(
+        {"google_refresh_token": encrypted}
+    ).eq("id", user_id).execute()
+
+
+def get_user_gmail_refresh_token(client: Client, user_id: str) -> Optional[str]:
+    """Fetch and decrypt the Gmail OAuth refresh token for the user, or None."""
+    rows = (
+        client.table("users")
+        .select("google_refresh_token")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows:
+        return None
+    encrypted = rows[0].get("google_refresh_token")
+    if not encrypted:
+        return None
+    try:
+        return _fernet().decrypt(encrypted.encode()).decode()
+    except Exception:
+        logger.warning("Failed to decrypt Gmail refresh token for user %s", user_id)
+        return None
+
+
+def get_imported_gmail_message_ids(client: Client, user_id: str) -> set:
+    """Return the set of Gmail message IDs already imported by this user."""
+    rows = (
+        client.table("applications")
+        .select("gmail_message_id")
+        .eq("user_id", user_id)
+        .not_.is_("gmail_message_id", "null")
+        .execute()
+        .data
+    )
+    return {r["gmail_message_id"] for r in rows if r.get("gmail_message_id")}
+
+
+def bulk_import_gmail_applications(
+    client: Client,
+    user_id: str,
+    items: List[Dict[str, Any]],
+    skip_message_ids: set,
+) -> List[str]:
+    """Insert jobs + applications for a list of Gmail-parsed items in 3 DB calls.
+
+    Each item must have: message_id, company, role, status, email_date.
+    Returns a list of created application IDs.
+    """
+    to_import = [it for it in items if it["message_id"] not in skip_message_ids]
+    if not to_import:
+        return []
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # 1. Find which job URLs already exist (one SELECT)
+    urls = [f"gmail-sync://{it['message_id']}" for it in to_import]
+    existing_jobs = (
+        client.table("jobs").select("id,url").in_("url", urls).execute().data
+    )
+    existing_by_url = {j["url"]: j["id"] for j in existing_jobs}
+
+    # 2. Insert missing jobs in one bulk INSERT (handle race condition)
+    new_job_payloads = [
+        {
+            "id": str(uuid.uuid4()),
+            "title": it["role"],
+            "company": it["company"],
+            "source": "gmail_sync",
+            "url": f"gmail-sync://{it['message_id']}",
+            "created_at": now,
+        }
+        for it in to_import
+        if f"gmail-sync://{it['message_id']}" not in existing_by_url
+    ]
+    if new_job_payloads:
+        try:
+            inserted = client.table("jobs").insert(new_job_payloads).execute().data
+            for j in inserted:
+                existing_by_url[j["url"]] = j["id"]
+        except Exception:
+            # Race condition: a concurrent request inserted one or more of the same URLs.
+            # Re-fetch all URLs that were in the batch to recover their IDs.
+            conflict_urls = [p["url"] for p in new_job_payloads]
+            resolved = (
+                client.table("jobs").select("id,url").in_("url", conflict_urls).execute().data
+            )
+            for j in resolved:
+                existing_by_url[j["url"]] = j["id"]
+
+    # 3. Insert all applications in one bulk INSERT
+    missing = [
+        it for it in to_import
+        if f"gmail-sync://{it['message_id']}" not in existing_by_url
+    ]
+    if missing:
+        logger.warning(
+            "bulk_import: %d item(s) had no job row after insert — skipping", len(missing)
+        )
+    app_payloads = [
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "job_id": existing_by_url[f"gmail-sync://{it['message_id']}"],
+            "status": it["status"] if it["status"] in _VALID_STATUSES else "applied",
+            "source": "gmail_sync",
+            "gmail_message_id": it["message_id"],
+            "applied_at": it.get("email_date"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        for it in to_import
+        if f"gmail-sync://{it['message_id']}" in existing_by_url
+    ]
+    if not app_payloads:
+        return []
+    inserted_apps = client.table("applications").insert(app_payloads).execute().data
+    return [a["id"] for a in inserted_apps]
+
+
+
 

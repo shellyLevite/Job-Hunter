@@ -34,16 +34,28 @@ job_matches table (SQL):
   created_at     timestamptz default now()
   unique(user_id, job_id)
 
+users table additions (run in Supabase SQL editor):
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS google_refresh_token text;
+
 applications table (SQL):
-  id         uuid primary key default gen_random_uuid()
-  user_id    uuid not null references users(id)
-  job_id     uuid not null references jobs(id)
-  status     text not null default 'saved'
-  notes      text
-  applied_at timestamptz
-  created_at timestamptz default now()
-  updated_at timestamptz default now()
+  id               uuid primary key default gen_random_uuid()
+  user_id          uuid not null references users(id)
+  job_id           uuid not null references jobs(id)
+  status           text not null default 'saved'
+  notes            text
+  applied_at       timestamptz
+  created_at       timestamptz default now()
+  updated_at       timestamptz default now()
+  source           text default 'manual'  -- 'manual' | 'gmail_sync'
+  gmail_message_id text                   -- for dedup; null for manual entries
   unique(user_id, job_id)
+
+  -- migration: run in Supabase SQL editor
+  ALTER TABLE applications ADD COLUMN IF NOT EXISTS source text DEFAULT 'manual';
+  ALTER TABLE applications ADD COLUMN IF NOT EXISTS gmail_message_id text;
+  CREATE UNIQUE INDEX IF NOT EXISTS applications_gmail_msg_idx
+    ON applications(user_id, gmail_message_id)
+    WHERE gmail_message_id IS NOT NULL;
 """
 
 from datetime import datetime
@@ -57,6 +69,7 @@ class UserRow(BaseModel):
     email: str
     hashed_password: str
     created_at: datetime
+    google_refresh_token: Optional[str] = None
 
 
 class CVRow(BaseModel):
@@ -96,3 +109,5 @@ class ApplicationRow(BaseModel):
     applied_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    source: str = "manual"  # 'manual' | 'gmail_sync'
+    gmail_message_id: Optional[str] = None

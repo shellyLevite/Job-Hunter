@@ -6,7 +6,7 @@ importing UserRead from auth.py) and makes the contract easy to discover.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, field_validator
 
@@ -47,3 +47,32 @@ class ApplicationUpdate(BaseModel):
     status: Optional[ApplicationStatus] = None
     notes: Optional[str] = None
     applied_at: Optional[str] = None
+
+
+# ── Gmail Sync ──────────────────────────────────────────────────────────────
+
+
+class GmailImportItem(BaseModel):
+    message_id: str
+    company: str
+    role: str
+    status: ApplicationStatus = "applied"
+    email_date: Optional[str] = None  # ISO datetime string
+
+
+class GmailPreviewItem(GmailImportItem):
+    """Preview item returned by /integrations/gmail/preview."""
+
+    subject: str
+    already_imported: bool = False
+
+
+class GmailImportRequest(BaseModel):
+    items: List[GmailImportItem]
+
+    @field_validator("items")
+    @classmethod
+    def max_100_items(cls, v: List[GmailImportItem]) -> List[GmailImportItem]:
+        if len(v) > 100:
+            raise ValueError("Cannot import more than 100 items at once.")
+        return v

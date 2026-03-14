@@ -11,6 +11,7 @@ export default defineConfig({
       '/jobs': 'http://localhost:8000',
       '/applications': 'http://localhost:8000',
       '/cv': 'http://localhost:8000',
+      '/integrations': 'http://localhost:8000',
     },
   },
 })

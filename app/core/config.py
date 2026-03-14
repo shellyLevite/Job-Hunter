@@ -23,7 +23,11 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+    GOOGLE_GMAIL_REDIRECT_URI: str = "http://localhost:8000/auth/google/gmail-callback"
     FRONTEND_URL: str = "http://localhost:5174"
+
+    # Gmail token encryption — generate with:
+    GMAIL_TOKEN_ENCRYPTION_KEY: str = ""
 
     # CORS — comma-separated list of allowed origins
     CORS_ORIGINS: str = "http://localhost:5174"
@@ -45,6 +49,24 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REFRESH_SECRET_KEY must be set. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        return v
+
+    @field_validator("GMAIL_TOKEN_ENCRYPTION_KEY")
+    @classmethod
+    def gmail_encryption_key_must_be_set(cls, v: str) -> str:
+        if not v:
+            raise ValueError(
+                "GMAIL_TOKEN_ENCRYPTION_KEY must be set. "
+                "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            )
+        try:
+            from cryptography.fernet import Fernet
+            Fernet(v.encode())
+        except Exception:
+            raise ValueError(
+                "GMAIL_TOKEN_ENCRYPTION_KEY is not a valid Fernet key. "
+                "Generate a new one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
             )
         return v
 

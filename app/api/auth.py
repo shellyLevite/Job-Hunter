@@ -19,6 +19,7 @@ Cookie layout
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
@@ -36,6 +37,7 @@ from app.db import crud
 from app.db.session import get_supabase
 from app.schemas import UserRead
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _COOKIE_ACCESS = "access_token"
@@ -246,3 +248,105 @@ def logout(response: Response):
     response.delete_cookie(_COOKIE_ACCESS)
     response.delete_cookie(_COOKIE_REFRESH, path="/auth/refresh")
     return {"message": "Logged out"}
+
+
+# ── Gmail OAuth ────────────────────────────────────────────────────────────
+
+_GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+
+
+@router.get("/google/gmail-connect")
+def gmail_connect(
+    request: Request,
+    _: UserRead = Depends(get_current_user),
+):
+    """Redirect the browser to Google to grant Gmail read-only access.
+
+    Requires the user to be logged in (verified via the access_token cookie).
+    """
+    state = secrets.token_urlsafe(32)
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_GMAIL_REDIRECT_URI,
+        "response_type": "code",
+        "scope": _GMAIL_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",  # always ask so Google issues a refresh token
+        "state": state,
+    }
+    redirect = RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
+    redirect.set_cookie(
+        key="gmail_oauth_state",
+        value=state,
+        httponly=True,
+        secure=settings.SECURE_COOKIES,
+        samesite="lax",
+        max_age=600,
+    )
+    return redirect
+
+
+@router.get("/google/gmail-callback")
+async def gmail_callback(
+    code: str,
+    state: str,
+    request: Request,
+    client: Client = Depends(get_supabase),
+):
+    """Exchange the Gmail authorization code, store the refresh token, redirect to frontend."""
+    stored_state = request.cookies.get("gmail_oauth_state")
+    if not stored_state or not secrets.compare_digest(stored_state, state):
+        # Do NOT delete the cookie here — this could be a CSRF probe from a third party.
+        raise HTTPException(status_code=400, detail="Invalid OAuth state — possible CSRF attack")
+
+    try:
+        # Authenticate the user BEFORE touching Google's API to fail fast.
+        current_user = get_current_user_optional(request, client)
+        if not current_user:
+            r = RedirectResponse(url=f"{settings.FRONTEND_URL}?gmail_error=unauthenticated", status_code=302)
+            r.delete_cookie("gmail_oauth_state")
+            return r
+
+        async with httpx.AsyncClient() as http:
+            token_res = await http.post(
+                _GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": settings.GOOGLE_GMAIL_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_data = token_res.json()
+
+        refresh_token_value = token_data.get("refresh_token")
+        if not refresh_token_value:
+            logger.warning("Gmail OAuth: no refresh_token returned. Google response: %s", token_data)
+            r = RedirectResponse(
+                url=f"{settings.FRONTEND_URL}?gmail_error=no_refresh_token", status_code=302
+            )
+            r.delete_cookie("gmail_oauth_state")
+            return r
+
+        user = crud.get_user_by_email(client, current_user.email)
+        if not user:
+            r = RedirectResponse(url=f"{settings.FRONTEND_URL}?gmail_error=user_not_found", status_code=302)
+            r.delete_cookie("gmail_oauth_state")
+            return r
+
+        crud.update_user_gmail_token(client, user["id"], refresh_token_value)
+
+        redirect = RedirectResponse(
+            url=f"{settings.FRONTEND_URL}?gmail_connected=1", status_code=302
+        )
+        redirect.delete_cookie("gmail_oauth_state")
+        return redirect
+
+    except Exception as exc:
+        logger.exception("Unexpected error in gmail_callback: %s", exc)
+        r = RedirectResponse(
+            url=f"{settings.FRONTEND_URL}?gmail_error=server_error", status_code=302
+        )
+        r.delete_cookie("gmail_oauth_state")
+        return r

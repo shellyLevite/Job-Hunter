@@ -3,4 +3,23 @@
 html, body, #root {
   height: 100%;
   overflow: hidden;
+  /* Firefox scrollbars */
+  scrollbar-width: thin;
+  scrollbar-color: #374151 transparent;
+}
+
+/* ── Custom scrollbars ─────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #374151; /* gray-700 */
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4b5563; /* gray-600 */
 }

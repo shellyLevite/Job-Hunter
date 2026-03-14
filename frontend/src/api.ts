@@ -179,3 +179,42 @@ export const fetchLatestCv = async (): Promise<CvRecord> => {
   const { data } = await api.get('/cv/latest')
   return data
 }
+
+// ── Gmail Integration ──────────────────────────────────────────────────────
+
+export interface GmailPreviewItem {
+  message_id: string
+  company: string
+  role: string
+  status: AppStatus
+  email_date: string
+  subject: string
+  already_imported: boolean
+}
+
+export interface GmailImportItem {
+  message_id: string
+  company: string
+  role: string
+  status: AppStatus
+  email_date: string
+}
+
+export const checkGmailStatus = async (): Promise<{ connected: boolean }> => {
+  const { data } = await api.get('/integrations/gmail/status')
+  return data
+}
+
+export const fetchGmailPreview = async (maxResults = 50): Promise<GmailPreviewItem[]> => {
+  const { data } = await api.get('/integrations/gmail/preview', {
+    params: { max_results: maxResults },
+  })
+  return data
+}
+
+export const importGmailApplications = async (
+  items: GmailImportItem[],
+): Promise<{ created: number; skipped: number; application_ids: string[] }> => {
+  const { data } = await api.post('/integrations/gmail/import', { items })
+  return data
+}

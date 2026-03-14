@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -17,8 +17,13 @@ import {
   fetchApplications,
   updateApplication,
   deleteApplication,
+  checkGmailStatus,
+  fetchGmailPreview,
+  importGmailApplications,
   type Application,
   type AppStatus,
+  type GmailPreviewItem,
+  type GmailImportItem,
 } from '../api'
 
 const COLUMNS: { id: AppStatus; label: string; color: string }[] = [
@@ -28,6 +33,290 @@ const COLUMNS: { id: AppStatus; label: string; color: string }[] = [
   { id: 'offer',     label: '🎉 Offer',      color: 'bg-green-800' },
   { id: 'rejected',  label: '❌ Rejected',   color: 'bg-red-900' },
 ]
+
+// ── Gmail Sync Modal ──────────────────────────────────────────────────────────
+
+type EditableItem = Omit<GmailPreviewItem, 'already_imported'>
+
+type ModalPhase =
+  | { phase: 'checking' }
+  | { phase: 'not_connected' }
+  | { phase: 'fetching' }
+  | { phase: 'preview'; items: EditableItem[]; skippedCount: number }
+  | { phase: 'importing' }
+  | { phase: 'done'; created: number }
+  | { phase: 'error'; message: string }
+
+function PreviewTable({
+  items: init,
+  skippedCount,
+  onImport,
+  onRefetch,
+}: {
+  items: EditableItem[]
+  skippedCount: number
+  onImport: (items: GmailImportItem[]) => void
+  onRefetch: () => void
+}) {
+  const [items, setItems] = useState<EditableItem[]>(init)
+
+  const update = (idx: number, field: keyof EditableItem, value: string) =>
+    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, [field]: value } : it)))
+
+  const remove = (idx: number) => setItems((prev) => prev.filter((_, i) => i !== idx))
+
+  if (items.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 py-10">
+        <p className="text-gray-400 text-center text-sm">
+          {skippedCount > 0
+            ? `All ${skippedCount} detected email${skippedCount !== 1 ? 's were' : ' was'} already imported.`
+            : 'No new job application emails found in your inbox.'}
+        </p>
+        <button onClick={onRefetch} className="text-indigo-400 hover:text-indigo-300 text-sm">
+          Refresh
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {skippedCount > 0 && (
+        <p className="text-gray-500 text-xs mb-2">
+          {skippedCount} email{skippedCount !== 1 ? 's' : ''} already imported — showing only new
+          ones.
+        </p>
+      )}
+      <div className="flex-1 overflow-y-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="text-gray-500 text-xs border-b border-gray-800">
+              <th className="text-left pb-2 pr-3 font-medium">Company</th>
+              <th className="text-left pb-2 pr-3 font-medium">Role</th>
+              <th className="text-left pb-2 pr-3 font-medium">Status</th>
+              <th className="text-left pb-2 pr-3 font-medium">Date</th>
+              <th className="pb-2" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-800/60">
+            {items.map((item, i) => (
+              <tr key={item.message_id}>
+                <td className="py-2 pr-3">
+                  <input
+                    value={item.company}
+                    onChange={(e) => update(i, 'company', e.target.value)}
+                    className="w-full bg-gray-800 text-white rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </td>
+                <td className="py-2 pr-3">
+                  <input
+                    value={item.role}
+                    onChange={(e) => update(i, 'role', e.target.value)}
+                    className="w-full bg-gray-800 text-white rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </td>
+                <td className="py-2 pr-3">
+                  <select
+                    value={item.status}
+                    onChange={(e) => update(i, 'status', e.target.value as AppStatus)}
+                    className="bg-gray-800 text-white rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="applied">Applied</option>
+                    <option value="interview">Interview</option>
+                    <option value="offer">Offer</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="saved">Saved</option>
+                  </select>
+                </td>
+                <td className="py-2 pr-3 text-gray-400 text-xs whitespace-nowrap">
+                  {new Date(item.email_date).toLocaleDateString()}
+                </td>
+                <td className="py-2">
+                  <button
+                    onClick={() => remove(i)}
+                    className="text-red-500 hover:text-red-400 text-xs"
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-800 flex-shrink-0">
+        <span className="text-gray-500 text-xs">
+          {items.length} application{items.length !== 1 ? 's' : ''} to import
+        </span>
+        <button
+          onClick={() => onImport(items)}
+          className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-5 py-2 rounded-lg text-sm"
+        >
+          Import All
+        </button>
+      </div>
+    </>
+  )
+}
+
+function GmailSyncModal({
+  onClose,
+  onImported,
+  autoFetch = false,
+}: {
+  onClose: () => void
+  onImported: (count: number) => void
+  autoFetch?: boolean
+}) {
+  const [phase, setPhase] = useState<ModalPhase>(
+    autoFetch ? { phase: 'fetching' } : { phase: 'checking' },
+  )
+
+  const doFetch = useCallback(async () => {
+    setPhase({ phase: 'fetching' })
+    try {
+      const preview = await fetchGmailPreview()
+      const skippedCount = preview.filter((i) => i.already_imported).length
+      const items: EditableItem[] = preview
+        .filter((i) => !i.already_imported)
+        .map(({ already_imported: _skip, ...rest }) => rest)
+      setPhase({ phase: 'preview', items, skippedCount })
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        'Failed to fetch Gmail preview.'
+      setPhase({ phase: 'error', message: msg })
+    }
+  }, [])
+
+  const checkAndFetch = useCallback(async () => {
+    setPhase({ phase: 'checking' })
+    try {
+      const { connected } = await checkGmailStatus()
+      if (connected) {
+        await doFetch()
+      } else {
+        setPhase({ phase: 'not_connected' })
+      }
+    } catch {
+      setPhase({ phase: 'error', message: 'Failed to check Gmail connection.' })
+    }
+  }, [doFetch])
+
+  useEffect(() => {
+    if (autoFetch) {
+      void doFetch()
+    } else {
+      void checkAndFetch()
+    }
+  }, [autoFetch, doFetch, checkAndFetch])
+
+  const handleImport = async (items: GmailImportItem[]) => {
+    setPhase({ phase: 'importing' })
+    try {
+      const result = await importGmailApplications(items)
+      onImported(result.created)
+      setPhase({ phase: 'done', created: result.created })
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        'Import failed.'
+      setPhase({ phase: 'error', message: msg })
+    }
+  }
+
+  const spinner = (label: string) => (
+    <div className="flex-1 flex items-center justify-center text-gray-400 py-10 text-sm">
+      {label}
+    </div>
+  )
+
+  const isBusy = phase.phase === 'importing' || phase.phase === 'checking' || phase.phase === 'fetching'
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+      onClick={isBusy ? undefined : onClose}
+    >
+      <div
+        className="bg-gray-900 rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4 flex-shrink-0">
+          <h2 className="text-white font-bold text-lg">Sync from Gmail</h2>
+          <button
+            onClick={onClose}
+            disabled={isBusy}
+            className="text-gray-500 hover:text-white text-2xl leading-none disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Body */}
+        {phase.phase === 'checking' && spinner('Checking Gmail connection…')}
+
+        {phase.phase === 'not_connected' && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 py-10">
+            <p className="text-gray-300 text-center text-sm max-w-sm">
+              Connect your Gmail account so Jobee can detect job applications from your inbox
+              automatically.
+            </p>
+            <a
+              href="/auth/google/gmail-connect"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm"
+            >
+              Connect Gmail
+            </a>
+          </div>
+        )}
+
+        {phase.phase === 'fetching' && spinner('Scanning your inbox…')}
+
+        {phase.phase === 'preview' && (
+          <PreviewTable
+            items={phase.items}
+            skippedCount={phase.skippedCount}
+            onImport={handleImport}
+            onRefetch={doFetch}
+          />
+        )}
+
+        {phase.phase === 'importing' && spinner('Importing applications…')}
+
+        {phase.phase === 'done' && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 py-10">
+            <p className="text-green-400 font-semibold text-lg">✓ Done!</p>
+            <p className="text-gray-300 text-sm">
+              Imported {phase.created} new application{phase.created !== 1 ? 's' : ''}.
+            </p>
+            <button
+              onClick={onClose}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm"
+            >
+              Close
+            </button>
+          </div>
+        )}
+
+        {phase.phase === 'error' && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 py-10">
+            <p className="text-red-400 text-sm text-center">{phase.message}</p>
+            <button
+              onClick={() => void checkAndFetch()}
+              className="text-indigo-400 hover:text-indigo-300 text-sm"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 // ── Card ─────────────────────────────────────────────────────────────────────
 
@@ -184,24 +473,27 @@ function DroppableColumn({
       <SortableContext items={colApps.map((a) => a.id)} strategy={verticalListSortingStrategy}>
         <div
           ref={setNodeRef}
-          className={`flex-1 overflow-y-auto space-y-3 pr-1 rounded-xl transition-colors ${
+          className={`flex-1 rounded-xl transition-colors ${
             isOver ? 'ring-2 ring-indigo-500/60 bg-indigo-950/20' : ''
           }`}
+          style={{ overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: '#374151 transparent' }}
         >
-          {colApps.map((app) => (
-            <AppCard
-              key={app.id}
-              app={app}
-              onDelete={onDelete}
-              onEdit={onEdit}
-              isDragging={app.id === activeId}
-            />
-          ))}
-          {colApps.length === 0 && (
-            <div className="border-2 border-dashed border-gray-700 rounded-xl h-16 flex items-center justify-center text-gray-600 text-xs">
-              Drop here
-            </div>
-          )}
+          <div className="space-y-3 pr-1 pb-2">
+            {colApps.map((app) => (
+              <AppCard
+                key={app.id}
+                app={app}
+                onDelete={onDelete}
+                onEdit={onEdit}
+                isDragging={app.id === activeId}
+              />
+            ))}
+            {colApps.length === 0 && (
+              <div className="border-2 border-dashed border-gray-700 rounded-xl h-16 flex items-center justify-center text-gray-600 text-xs">
+                Drop here
+              </div>
+            )}
+          </div>
         </div>
       </SortableContext>
     </div>
@@ -216,13 +508,28 @@ export default function KanbanBoard() {
   const [error, setError] = useState<string | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [editingApp, setEditingApp] = useState<Application | null>(null)
+  const [gmailModalOpen, setGmailModalOpen] = useState(false)
+  const [autoFetch, setAutoFetch] = useState(false)
 
   useEffect(() => {
     fetchApplications()
       .then((data) => setApps(data))
       .catch(() => setError('Failed to load applications.'))
       .finally(() => setLoading(false))
+
+    // Auto-open Gmail modal after OAuth redirect
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('gmail_connected') === '1') {
+      setAutoFetch(true)
+      setGmailModalOpen(true)
+      window.history.replaceState({}, '', window.location.pathname)
+    }
   }, [])
+
+  const refreshApps = () =>
+    fetchApplications()
+      .then(setApps)
+      .catch((err) => console.error('Failed to refresh applications after Gmail import:', err))
 
   const byStatus = (status: AppStatus) => apps.filter((a) => a.status === status)
 
@@ -234,7 +541,6 @@ export default function KanbanBoard() {
     const draggedId = active.id as string
     const targetId = over.id as string
 
-    // Determine the target column
     const col = COLUMNS.find((c) => c.id === targetId)
     const newStatus: AppStatus | undefined = col ? col.id : apps.find((a) => a.id === targetId)?.status
 
@@ -242,7 +548,6 @@ export default function KanbanBoard() {
     const app = apps.find((a) => a.id === draggedId)
     if (!app || app.status === newStatus) return
 
-    // Optimistic update — roll back on API failure so the board stays consistent
     const snapshot = apps
     setApps((prev) => prev.map((a) => a.id === draggedId ? { ...a, status: newStatus } : a))
     try {
@@ -266,18 +571,48 @@ export default function KanbanBoard() {
     setApps((prev) => prev.map((a) => a.id === updated.id ? updated : a))
   }
 
+  const openGmailModal = () => {
+    setAutoFetch(false)
+    setGmailModalOpen(true)
+  }
+
   const activeApp = apps.find((a) => a.id === activeId)
 
   if (loading) return <div className="text-gray-400 p-8">Loading applications…</div>
   if (error) return <div className="text-red-400 p-8">{error}</div>
 
   return (
-    <>
+    <div className="flex flex-col h-full">
+      {/* Board header */}
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
+        <h2 className="text-xl font-bold text-white">Application Tracker</h2>
+        <button
+          onClick={openGmailModal}
+          className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-sm px-3 py-1.5 rounded-lg transition-colors"
+        >
+          ✉ Sync from Gmail
+        </button>
+      </div>
+
+      {/* Gmail sync modal */}
+      {gmailModalOpen && (
+        <GmailSyncModal
+          onClose={() => setGmailModalOpen(false)}
+          onImported={(count) => {
+            setGmailModalOpen(false)
+            if (count > 0) void refreshApps()
+          }}
+          autoFetch={autoFetch}
+        />
+      )}
+
+      {/* Edit modal */}
       {editingApp && (
         <EditModal app={editingApp} onClose={() => setEditingApp(null)} onSave={handleSave} />
       )}
+
       <DndContext collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="flex gap-3 h-full">
+        <div className="flex gap-3 flex-1 min-h-0">
           {COLUMNS.map((col) => (
             <DroppableColumn
               key={col.id}
@@ -299,6 +634,6 @@ export default function KanbanBoard() {
           )}
         </DragOverlay>
       </DndContext>
-    </>
+    </div>
   )
 }
