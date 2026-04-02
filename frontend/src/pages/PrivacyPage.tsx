@@ -61,8 +61,8 @@ export default function PrivacyPage() {
         <h2 className="text-xl font-semibold text-white mb-2">6. Contact</h2>
         <p>
           For any privacy-related questions, contact us at:{' '}
-          <a href="mailto:shellylevite@gmail.com" className="text-indigo-400 underline">
-            shellylevite@gmail.com
+          <a href="mailto:levite2002@gmail.com" className="text-indigo-400 underline">
+            levite2002@gmail.com
           </a>
         </p>
       </section>
