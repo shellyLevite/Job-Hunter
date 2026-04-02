@@ -16,7 +16,7 @@ from app.api.auth import get_current_user
 from app.db import crud
 from app.db.session import get_supabase
 from app.schemas import GmailImportRequest, GmailPreviewItem, UserRead
-from app.services.gmail_parser import fetch_gmail_preview
+from app.services.gmail_parser import GmailTokenRefreshError, fetch_gmail_preview
 
 router = APIRouter()
 
@@ -67,7 +67,13 @@ async def gmail_preview(
 
     try:
         preview = await fetch_gmail_preview(refresh_token, max_results=max_results)
-    except RuntimeError as exc:
+    except GmailTokenRefreshError as exc:
+        if exc.reason == "invalid_grant":
+            crud.clear_user_gmail_token(client, user["id"])
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gmail connection expired or was revoked. Please reconnect Gmail.",
+            )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     for item in preview:

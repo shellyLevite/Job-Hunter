@@ -40,7 +40,7 @@ type EditableItem = Omit<GmailPreviewItem, 'already_imported'>
 
 type ModalPhase =
   | { phase: 'checking' }
-  | { phase: 'not_connected' }
+  | { phase: 'not_connected'; message?: string }
   | { phase: 'fetching' }
   | { phase: 'preview'; items: EditableItem[]; skippedCount: number }
   | { phase: 'importing' }
@@ -184,10 +184,20 @@ function GmailSyncModal({
         .map(({ already_imported: _skip, ...rest }) => rest)
       setPhase({ phase: 'preview', items, skippedCount })
     } catch (e: unknown) {
-      const msg =
-        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
-        'Failed to fetch Gmail preview.'
-      setPhase({ phase: 'error', message: msg })
+      const response = (e as { response?: { status?: number; data?: { detail?: string } } })?.response
+      const msg = response?.data?.detail ?? 'Failed to fetch Gmail preview.'
+      const normalized = msg.toLowerCase()
+      const shouldReconnect =
+        normalized.includes('reconnect gmail') ||
+        normalized.includes('not connected') ||
+        normalized.includes('expired') ||
+        normalized.includes('revoked')
+
+      if (shouldReconnect) {
+        setPhase({ phase: 'not_connected', message: msg })
+      } else {
+        setPhase({ phase: 'error', message: msg })
+      }
     }
   }, [])
 
@@ -261,6 +271,9 @@ function GmailSyncModal({
 
         {phase.phase === 'not_connected' && (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 py-10">
+            {phase.message && (
+              <p className="text-amber-300 text-center text-sm max-w-sm">{phase.message}</p>
+            )}
             <p className="text-gray-300 text-center text-sm max-w-sm">
               Connect your Gmail account so Jobee can detect job applications from your inbox
               automatically.
@@ -305,6 +318,14 @@ function GmailSyncModal({
         {phase.phase === 'error' && (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 py-10">
             <p className="text-red-400 text-sm text-center">{phase.message}</p>
+            {phase.message.toLowerCase().includes('reconnect gmail') && (
+              <a
+                href="/auth/google/gmail-connect"
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm"
+              >
+                Connect Gmail
+              </a>
+            )}
             <button
               onClick={() => void checkAndFetch()}
               className="text-indigo-400 hover:text-indigo-300 text-sm"

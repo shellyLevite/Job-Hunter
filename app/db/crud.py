@@ -260,6 +260,11 @@ def update_user_gmail_token(client: Client, user_id: str, refresh_token: str) ->
     ).eq("id", user_id).execute()
 
 
+def clear_user_gmail_token(client: Client, user_id: str) -> None:
+    """Clear a user's stored Gmail refresh token."""
+    client.table("users").update({"google_refresh_token": None}).eq("id", user_id).execute()
+
+
 def get_user_gmail_refresh_token(client: Client, user_id: str) -> Optional[str]:
     """Fetch and decrypt the Gmail OAuth refresh token for the user, or None."""
     rows = (

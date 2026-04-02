@@ -24,13 +24,13 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
     GOOGLE_GMAIL_REDIRECT_URI: str = "http://localhost:8000/auth/google/gmail-callback"
-    FRONTEND_URL: str = "http://localhost:5174"
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # Gmail token encryption — generate with:
     GMAIL_TOKEN_ENCRYPTION_KEY: str = ""
 
     # CORS — comma-separated list of allowed origins
-    CORS_ORIGINS: str = "http://localhost:5174"
+    CORS_ORIGINS: str = "http://localhost:5173"
 
     @field_validator("SECRET_KEY")
     @classmethod

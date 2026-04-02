@@ -198,9 +198,15 @@ async def google_callback(
     if not email:
         raise HTTPException(status_code=400, detail="Could not retrieve email from Google")
 
-    user = crud.get_user_by_email(client, email)
-    if not user:
-        user = crud.create_google_user(client, email=email)
+    try:
+        user = crud.get_user_by_email(client, email)
+        if not user:
+            user = crud.create_google_user(client, email=email)
+    except Exception as exc:
+        logger.exception("Unexpected error in google_callback while accessing DB: %s", exc)
+        r = RedirectResponse(url=f"{settings.FRONTEND_URL}?auth_error=server_error", status_code=302)
+        r.delete_cookie("oauth_state")
+        return r
 
     redirect = RedirectResponse(url=settings.FRONTEND_URL, status_code=302)
     _set_auth_cookies(redirect, email)

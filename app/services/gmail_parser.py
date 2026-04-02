@@ -30,6 +30,14 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class GmailTokenRefreshError(RuntimeError):
+    """Raised when exchanging a Gmail refresh token for an access token fails."""
+
+    def __init__(self, message: str, reason: Optional[str] = None):
+        super().__init__(message)
+        self.reason = reason
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -38,15 +46,15 @@ _GMAIL_MESSAGE_URL = "https://www.googleapis.com/gmail/v1/users/me/messages/{id}
 
 # Gmail server-side filter — narrow the inbox before we touch anything
 _SEARCH_QUERY = (
-    'subject:("thank you for applying" OR "we received your application" '
-    'OR "application received" OR "interview invitation" OR "interview request" '
-    "OR \"we'd like to schedule\" OR \"unfortunately\" OR \"offer letter\" "
-    'OR "job offer" OR "we are pleased to offer" OR "your application" '
-    'OR "not moving forward" OR "application update" '
-    'OR "offer accepted" OR "post offer" OR "pre-hire" OR "pre hire" '
-    'OR "welcome to" OR "your start date" OR "starting soon" '
-    'OR "excited to have you join" OR "complete your pre")'
+    'in:anywhere ('
+    'subject:(application OR interview OR offer OR rejection OR rejected OR unfortunately OR congratulations OR welcome) '
+    'OR "thank you for applying" OR "application received" OR "interview invitation" '
+    'OR "interview request" OR "job offer" OR "not moving forward" OR "we are pleased to offer"'
+    ') newer_than:730d'
 )
+
+# Fallback query when strict search returns nothing.
+_SEARCH_QUERY_FALLBACK = 'in:anywhere (application OR interview OR offer OR rejected OR rejection) newer_than:1095d'
 
 _VALID_STATUSES = {"applied", "interview", "offer", "rejected"}
 _STATUS_PRIORITY = {"offer": 0, "interview": 1, "rejected": 2, "applied": 3}
@@ -75,7 +83,7 @@ Emails:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
-async def _exchange_refresh_token(refresh_token: str) -> Optional[str]:
+async def _exchange_refresh_token(refresh_token: str) -> str:
     async with httpx.AsyncClient() as client:
         res = await client.post(
             _GOOGLE_TOKEN_URL,
@@ -87,13 +95,26 @@ async def _exchange_refresh_token(refresh_token: str) -> Optional[str]:
             },
         )
         if res.status_code != 200:
+            reason = None
+            try:
+                payload = res.json()
+                reason = payload.get("error")
+            except Exception:
+                payload = None
             logger.warning(
                 "Gmail token refresh failed: HTTP %s — %s",
                 res.status_code,
                 res.text[:200],
             )
-            return None
-        return res.json().get("access_token")
+            raise GmailTokenRefreshError(
+                "Gmail token refresh failed — please reconnect Gmail",
+                reason=reason,
+            )
+
+        access_token = res.json().get("access_token")
+        if not access_token:
+            raise GmailTokenRefreshError("Google token endpoint returned no access token")
+        return access_token
 
 
 def _decode_b64(data: str) -> str:
@@ -127,35 +148,67 @@ def _ms_to_iso(ms: str) -> str:
         return datetime.now(timezone.utc).isoformat()
 
 
+def _infer_status_heuristic(text: str) -> Optional[str]:
+    """Infer application status from email text when LLM output is missing/unclear."""
+    t = (text or "").lower()
+    if any(k in t for k in ["offer", "we are pleased to offer", "congratulations"]):
+        return "offer"
+    if any(k in t for k in ["interview", "schedule", "calendar", "availability", "phone screen"]):
+        return "interview"
+    if any(k in t for k in ["unfortunately", "not moving forward", "rejected", "decline"]):
+        return "rejected"
+    if any(k in t for k in ["thank you for applying", "application received", "applied", "your application"]):
+        return "applied"
+    return None
+
+
 async def _llm_extract_batch(emails: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    """Send all emails in ONE Groq call; return a list of {company, role, status}.
+    """Send emails in batches to Groq to avoid token limit errors.
+    
+    Splits large email lists into chunks of max 5 emails per batch to stay
+    under the 12K TPM limit. Returns a list of {company, role, status}.
 
     Falls back to a list of empty dicts on any failure so callers can
     gracefully use the regex_status instead.
     """
-    emails_block = "\n\n".join(
-        f"[{e['index']}]\nFrom: {e['sender']}\nSubject: {e['subject']}\n{e['snippet']}"
-        for e in emails
-    )
+    if not emails:
+        return []
+    
+    # Process in chunks of 5 to avoid hitting token limits
+    BATCH_SIZE = 5
+    results = [{}] * len(emails)
     groq = AsyncGroq(api_key=settings.GROQ_API_KEY)
-    try:
-        resp = await groq.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": _BATCH_PROMPT.format(emails_block=emails_block)}],
-            temperature=0,
-            max_tokens=8192,
-            timeout=60,
+    
+    for batch_start in range(0, len(emails), BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, len(emails))
+        batch = emails[batch_start:batch_end]
+        
+        emails_block = "\n\n".join(
+            f"[{e['index']}]\nFrom: {e['sender']}\nSubject: {e['subject']}\n{e['snippet']}"
+            for e in batch
         )
-        raw = resp.choices[0].message.content.strip()
-        # Strip markdown code fences if the model wraps output in ```json … ```
-        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.DOTALL).strip()
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return parsed
-    except Exception as exc:
-        logger.warning("LLM batch extraction failed: %s", exc)
+        
+        try:
+            logger.info(f"LLM batch extraction: processing {len(batch)} emails (indices {batch[0]['index']}-{batch[-1]['index']})")
+            resp = await groq.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": _BATCH_PROMPT.format(emails_block=emails_block)}],
+                temperature=0,
+                max_tokens=8192,
+                timeout=60,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip markdown code fences if the model wraps output in ```json … ```
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.DOTALL).strip()
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                # Store results in correct positions
+                for i, item in enumerate(parsed):
+                    results[batch_start + i] = item
+        except Exception as exc:
+            logger.warning(f"LLM batch extraction failed for batch {batch_start}-{batch_end}: {exc}")
 
-    return [{}] * len(emails)
+    return results
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -169,22 +222,33 @@ async def fetch_gmail_preview(
 
     Each item: message_id, company, role, status, email_date, subject.
     Nothing is written to the database.
-    Raises RuntimeError if the Gmail token refresh fails.
+    Raises GmailTokenRefreshError if the Gmail token refresh fails.
     """
     access_token = await _exchange_refresh_token(refresh_token)
-    if not access_token:
-        raise RuntimeError("Gmail token refresh failed — please reconnect Gmail")
 
     auth_headers = {"Authorization": f"Bearer {access_token}"}
 
-    # 1. Fetch message IDs matching the search query
+    # 1. Fetch message IDs matching the search query (with fallback)
     async with httpx.AsyncClient(timeout=30) as http:
         list_res = await http.get(
             _GMAIL_MESSAGES_URL,
             headers=auth_headers,
             params={"q": _SEARCH_QUERY, "maxResults": max_results},
         )
+        if list_res.status_code != 200:
+            raise RuntimeError(f"Gmail list API failed ({list_res.status_code}). Please reconnect Gmail.")
+
         message_ids = [m["id"] for m in list_res.json().get("messages", [])]
+
+        if not message_ids:
+            fallback_res = await http.get(
+                _GMAIL_MESSAGES_URL,
+                headers=auth_headers,
+                params={"q": _SEARCH_QUERY_FALLBACK, "maxResults": max_results},
+            )
+            if fallback_res.status_code != 200:
+                raise RuntimeError(f"Gmail list API failed ({fallback_res.status_code}). Please reconnect Gmail.")
+            message_ids = [m["id"] for m in fallback_res.json().get("messages", [])]
 
         # Fetch all message details concurrently, capped to avoid rate limits
         _sem = asyncio.Semaphore(10)
@@ -196,6 +260,9 @@ async def fetch_gmail_preview(
                     headers=auth_headers,
                     params={"format": "full"},
                 )
+                if r.status_code != 200:
+                    logger.warning("Gmail message fetch failed for %s: HTTP %s", msg_id, r.status_code)
+                    return {}
                 return r.json()
 
         raw_messages = await asyncio.gather(*[_fetch_one(mid) for mid in message_ids])
@@ -203,6 +270,8 @@ async def fetch_gmail_preview(
     # 2. Build candidates list from all fetched messages
     candidates: List[Dict[str, Any]] = []
     for data in raw_messages:
+        if not data or "payload" not in data:
+            continue
         payload = data.get("payload", {})
         hdr = payload.get("headers", [])
         subject = _get_header(hdr, "Subject")
@@ -231,6 +300,8 @@ async def fetch_gmail_preview(
     for i, candidate in enumerate(candidates):
         llm = llm_results[i] if i < len(llm_results) else {}
         status = llm.get("status")
+        if status not in _VALID_STATUSES:
+            status = _infer_status_heuristic(f"{candidate['subject']}\n{candidate['snippet']}")
         if status not in _VALID_STATUSES:
             continue
         company = (llm.get("company") or "").strip() or "Unknown Company"
