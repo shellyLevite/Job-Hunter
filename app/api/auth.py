@@ -62,12 +62,13 @@ def _create_refresh_token(email: str) -> str:
 
 def _set_auth_cookies(response: Response, email: str) -> None:
     """Write both access and refresh cookies on the response."""
+    cookie_samesite = "none" if settings.SECURE_COOKIES else "lax"
     response.set_cookie(
         key=_COOKIE_ACCESS,
         value=_create_access_token(email),
         httponly=True,
         secure=settings.SECURE_COOKIES,
-        samesite="lax",
+        samesite=cookie_samesite,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     response.set_cookie(
@@ -75,7 +76,7 @@ def _set_auth_cookies(response: Response, email: str) -> None:
         value=_create_refresh_token(email),
         httponly=True,
         secure=settings.SECURE_COOKIES,
-        samesite="lax",
+        samesite=cookie_samesite,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86_400,
         path="/auth/refresh",
     )
