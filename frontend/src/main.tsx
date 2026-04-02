@@ -1,13 +1,25 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import { AuthProvider } from './AuthContext.tsx'
+import PrivacyPage from './pages/PrivacyPage.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AuthProvider>
-      <App />
-    </AuthProvider>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route
+          path="*"
+          element={
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          }
+        />
+      </Routes>
+    </BrowserRouter>
   </StrictMode>,
 )

@@ -155,7 +155,7 @@ def google_login():
         value=state,
         httponly=True,
         secure=settings.SECURE_COOKIES,
-        samesite="lax",
+        samesite="none" if settings.SECURE_COOKIES else "lax",
         max_age=600,  # 10 minutes — enough to complete the OAuth dance
     )
     return redirect
