@@ -279,7 +279,7 @@ function GmailSyncModal({
               automatically.
             </p>
             <a
-              href="/auth/google/gmail-connect"
+              href={`${import.meta.env.VITE_API_URL ?? ''}/auth/google/gmail-connect`}
               className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm"
             >
               Connect Gmail
@@ -320,7 +320,7 @@ function GmailSyncModal({
             <p className="text-red-400 text-sm text-center">{phase.message}</p>
             {phase.message.toLowerCase().includes('reconnect gmail') && (
               <a
-                href="/auth/google/gmail-connect"
+                href={`${import.meta.env.VITE_API_URL ?? ''}/auth/google/gmail-connect`}
                 className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm"
               >
                 Connect Gmail
