@@ -68,7 +68,7 @@ async def gmail_preview(
     try:
         preview = await fetch_gmail_preview(refresh_token, max_results=max_results)
     except GmailTokenRefreshError as exc:
-        if exc.reason == "invalid_grant":
+        if exc.reason in ("invalid_grant", "unauthorized_client"):
             crud.clear_user_gmail_token(client, user["id"])
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
